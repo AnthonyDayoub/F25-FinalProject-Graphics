@@ -23,6 +23,8 @@ module.exports = {
                 generator: { filename: 'images/[name][ext]', },
             },
             {
+                // This rule is good, but it won't be used by GLTFLoader
+                // It's for when you import a model directly in your JS
                 test: /\.(stl|obj|mtl|gltf|glb)$/i,
                 type: 'asset/resource',
                 generator: { filename: 'models/[name][ext]', },
@@ -36,10 +38,18 @@ module.exports = {
         new HtmlWebpackPlugin({
             template: './src/index.html',
             filename: 'index.html',
-            chunks: ['flight-sim'],
+            // --- FIX 1 ---
+            // Point to the correct entry chunk name
+            chunks: ['final-project'], 
         }),
     ],
     devServer: {
+        // --- FIX 2 ---
+        // Tell the server to serve static files (like your model)
+        // from the 'src' directory.
+        static: {
+            directory: path.join(__dirname, 'src'),
+        },
         compress: true,
         port: 8085,
         hot: true,
