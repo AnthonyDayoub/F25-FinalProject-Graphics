@@ -1,11 +1,10 @@
 /* global module, require, __dirname */
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
-const CopyWebpackPlugin = require('copy-webpack-plugin'); // <-- 1. ADD THIS LINE
 
 module.exports = {
     entry: {
-        'flight-sim': './src/flight-sim.js',
+        'final-project': './src/final-project.js',
     },
     output: {
         filename: '[name].js',
@@ -33,24 +32,12 @@ module.exports = {
     resolve: {
         extensions: ['.js']
     },
-   // webpack.config.js
-
     plugins: [
         new HtmlWebpackPlugin({
             template: './src/index.html',
             filename: 'index.html',
             chunks: ['flight-sim'],
         }),
-
-        new CopyWebpackPlugin({
-            patterns: [
-                { 
-                    // This now correctly points to your source folder
-                    from: path.resolve(__dirname, 'src/fortnite_plane'), 
-                    to: 'fortnite_plane'
-                }
-            ]
-        })
     ],
     devServer: {
         compress: true,
