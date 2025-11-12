@@ -9,7 +9,21 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xbfd1e5); // Light blue background
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 5, 15); // Adjust camera position as needed
+const defaultCameraPosition = new THREE.Vector3(0, 7, 20);
+const defaultCameraTarget = new THREE.Vector3(0, 2, -5);
+camera.position.copy(defaultCameraPosition);
+camera.lookAt(defaultCameraTarget);
+
+// Camera follow helpers
+const chaseOffset = new THREE.Vector3(0, 4, 10);
+const lookOffset = new THREE.Vector3(0, 1.5, -4);
+const chaseLerpFactor = 0.12;
+const idleLerpFactor = 0.05;
+const chaseCameraPosition = new THREE.Vector3();
+const chaseLookAt = new THREE.Vector3();
+const carWorldPosition = new THREE.Vector3();
+const carWorldQuaternion = new THREE.Quaternion();
+let carModel = null;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.shadowMap.enabled = true; // Enable shadows
@@ -49,14 +63,6 @@ const guardRailMaterial = new THREE.MeshStandardMaterial({
     roughness: 0.2
 });
 
-const neonArrowMaterial = new THREE.MeshStandardMaterial({
-    color: 0x00fff4,
-    emissive: 0x00fff4,
-    emissiveIntensity: 1.5,
-    transparent: true,
-    opacity: 0.9
-});
-
 const trackMaterial = new THREE.MeshStandardMaterial({
     color: 0x111111,
     metalness: 0.1,
@@ -72,57 +78,50 @@ const createTrackSegment = (length, width = 4) => {
 };
 
 const createGuardRail = (length, offsetX) => {
-    const railGeometry = new THREE.BoxGeometry(0.2, 1, length);
+    const railGeometry = new THREE.BoxGeometry(0.3, 1, length);
     const rail = new THREE.Mesh(railGeometry, guardRailMaterial);
-    rail.position.set(offsetX, 0.6, 0);
+    rail.position.set(offsetX, 0.6, -length / 2);
     rail.castShadow = true;
+    rail.receiveShadow = true;
     return rail;
 };
 
-const createNeonArrow = () => {
-    const arrowGeometry = new THREE.ConeGeometry(0.4, 1.2, 16);
-    const arrow = new THREE.Mesh(arrowGeometry, neonArrowMaterial);
-    arrow.rotation.x = Math.PI;
-    arrow.position.y = 0.8;
-    return arrow;
+const buildTrackSection = (length) => {
+    const section = new THREE.Group();
+    const trackSurface = createTrackSegment(length);
+    trackSurface.position.z = -length / 2;
+    section.add(trackSurface);
+    section.add(createGuardRail(length, 2.4));
+    section.add(createGuardRail(length, -2.4));
+    return section;
 };
 
-const straightSection = new THREE.Group();
-straightSection.name = 'straightSection';
-const straightTrack = createTrackSegment(20);
-straightSection.add(straightTrack);
-straightSection.add(createGuardRail(20, 2.3));
-straightSection.add(createGuardRail(20, -2.3));
+const trackSectionsConfig = [
+    { length: 20, turn: 0, tilt: 0 },
+    { length: 12, turn: THREE.MathUtils.degToRad(-30), tilt: THREE.MathUtils.degToRad(8) },
+    { length: 18, turn: THREE.MathUtils.degToRad(-45), tilt: THREE.MathUtils.degToRad(12) },
+    { length: 22, turn: 0, tilt: 0 }
+];
 
-for (let i = -2; i <= 2; i++) {
-    const arrow = createNeonArrow();
-    arrow.position.z = i * 2.5;
-    straightSection.add(arrow);
-}
+const headingAxis = new THREE.Vector3(0, 1, 0);
+const trackAdvance = new THREE.Vector3();
+let currentHeading = 0;
+const currentPosition = new THREE.Vector3(0, 0, 0);
 
-trackGroup.add(straightSection);
+trackSectionsConfig.forEach((sectionConfig, index) => {
+    const section = buildTrackSection(sectionConfig.length);
+    section.name = `trackSection_${index}`;
+    section.position.copy(currentPosition);
+    section.rotation.y = currentHeading;
+    section.rotation.z = sectionConfig.tilt;
+    trackGroup.add(section);
 
-const bankedTurn = new THREE.Group();
-bankedTurn.name = 'bankedTurn';
-const bankedPiece = createTrackSegment(15);
-bankedPiece.rotation.y = Math.PI / 4;
-bankedTurn.add(bankedPiece);
-bankedTurn.add(createGuardRail(15, 2.3));
-bankedTurn.add(createGuardRail(15, -2.3));
-bankedTurn.position.set(0, 0, -15);
-bankedTurn.rotation.z = THREE.MathUtils.degToRad(18);
+    trackAdvance.set(0, 0, -sectionConfig.length);
+    trackAdvance.applyAxisAngle(headingAxis, currentHeading);
+    currentPosition.add(trackAdvance);
+    currentHeading += sectionConfig.turn;
+});
 
-const arrowCluster = new THREE.Group();
-for (let i = 0; i < 3; i++) {
-    const arrow = createNeonArrow();
-    arrow.position.set(0, 0.8 + i * 0.2, -3 + i);
-    arrow.rotation.x = Math.PI * 0.9;
-    arrowCluster.add(arrow);
-}
-arrowCluster.position.set(0, 0, -4);
-bankedTurn.add(arrowCluster);
-
-trackGroup.add(bankedTurn);
 scene.add(trackGroup);
 
 // --- City + Sky group placeholders ---
@@ -151,8 +150,8 @@ const createBuilding = ({ width, height, depth, color }) => {
         emissiveIntensity: 0.8
     });
 
-    for (let y = 1; y < height; y += 2) {
-        const window = new THREE.Mesh(new THREE.BoxGeometry(width * 0.8, 0.1, 0.1), windowMaterial);
+    for (let y = 1; y < height; y += 1.5) {
+        const window = new THREE.Mesh(new THREE.BoxGeometry(width * 0.85, 0.12, 0.1), windowMaterial);
         window.position.set(0, y, depth / 2 + 0.01);
         buildingGroup.add(window);
     }
@@ -171,17 +170,24 @@ const createBuilding = ({ width, height, depth, color }) => {
     return buildingGroup;
 };
 
-const blockOffsets = [-10, 10];
-blockOffsets.forEach((xOffset) => {
-    const building = createBuilding({ width: 4, height: 8 + Math.random() * 4, depth: 4, color: 0x38304c });
-    building.position.x = xOffset;
-    building.position.z = -10;
+const blockOffsets = [-20, -10, 10, 20];
+blockOffsets.forEach((xOffset, index) => {
+    const building = createBuilding({
+        width: 5 + Math.random() * 2,
+        height: 12 + Math.random() * 6,
+        depth: 5 + Math.random() * 2,
+        color: index % 2 === 0 ? 0x38304c : 0x2b203a
+    });
+    building.position.set(xOffset, 0, -12 - Math.random() * 8);
     cityBlocks.add(building);
 
-    const lowRise = createBuilding({ width: 6, height: 4, depth: 4, color: 0x241b2f });
-    lowRise.position.set(xOffset + 5, -0.5, -5);
-    cityBlocks.add(lowRise);
+    const tower = createBuilding({ width: 4, height: 16 + Math.random() * 6, depth: 4, color: 0x1f142c });
+    tower.position.set(xOffset + (Math.random() > 0.5 ? 4 : -4), 0, -18 - Math.random() * 6);
+    cityBlocks.add(tower);
 });
+
+cityBlocks.scale.set(2.2, 2.2, 2.2);
+cityBlocks.position.z = -6;
 
 const flyingBillboard = new THREE.Mesh(
     new THREE.PlaneGeometry(4, 2),
@@ -223,10 +229,15 @@ const distantTraffic = new THREE.Mesh(
 distantTraffic.position.set(0, 7, -20);
 skyStuff.add(distantTraffic);
 
+skyStuff.scale.set(1.5, 1.5, 1.5);
+skyStuff.position.set(0, 1, -5);
+
 scene.add(cityBlocks, skyStuff);
 
 // --- Controls (for easy testing) ---
 const controls = new OrbitControls(camera, renderer.domElement);
+controls.enabled = false;
+controls.target.copy(defaultCameraTarget);
 controls.update();
 
 // --- ✨ Model Loader Logic ✨ ---
@@ -253,6 +264,7 @@ loader.load(
             }
         });
         
+        carModel = model;
         scene.add(model);
     },
     
@@ -270,7 +282,21 @@ loader.load(
 // --- Render Loop ---
 function animate() {
     requestAnimationFrame(animate);
-    controls.update(); // Update controls
+
+    if (carModel) {
+        carModel.getWorldPosition(carWorldPosition);
+        carModel.getWorldQuaternion(carWorldQuaternion);
+
+        chaseCameraPosition.copy(chaseOffset).applyQuaternion(carWorldQuaternion).add(carWorldPosition);
+        camera.position.lerp(chaseCameraPosition, chaseLerpFactor);
+
+        chaseLookAt.copy(lookOffset).applyQuaternion(carWorldQuaternion).add(carWorldPosition);
+        camera.lookAt(chaseLookAt);
+    } else {
+        camera.position.lerp(defaultCameraPosition, idleLerpFactor);
+        camera.lookAt(defaultCameraTarget);
+    }
+
     renderer.render(scene, camera);
 }
 
