@@ -2,7 +2,10 @@ import * as THREE from 'three';
 // Import the GLTFLoader
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 // Import orbit controls for testing
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+// import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; // ✨ Removed, you have a custom camera
+
+// ✨ 1. Added Clock for physics
+const clock = new THREE.Clock();
 
 // --- Basic Scene Setup ---
 const scene = new THREE.Scene();
@@ -22,11 +25,11 @@ const carWorldQuaternion = new THREE.Quaternion();
 let carModel = null;
 
 // Camera / car sizing helpers
-const carBoundingBox = new THREE.Box3();
-const carSize = new THREE.Vector3();
+// const carBoundingBox = new THREE.Box3(); // Unused, can remove if you want
+// const carSize = new THREE.Vector3(); // Unused, can remove if you want
 const followSpherical = new THREE.Spherical(8, THREE.MathUtils.degToRad(42), 0);
 let minCameraDistance = 4;
-let maxCameraDistance = 30;
+let maxCameraDistance = 0;
 const minPolarAngle = THREE.MathUtils.degToRad(20);
 const maxPolarAngle = THREE.MathUtils.degToRad(70);
 const pointerRotationSpeed = 0.0055;
@@ -49,6 +52,7 @@ document.body.appendChild(renderer.domElement);
 renderer.domElement.style.cursor = 'grab';
 renderer.domElement.style.touchAction = 'none';
 
+// --- All your custom camera event listeners (unchanged) ---
 const releasePointerCapture = (event) => {
     if (renderer.domElement.hasPointerCapture && renderer.domElement.hasPointerCapture(event.pointerId)) {
         renderer.domElement.releasePointerCapture(event.pointerId);
@@ -107,6 +111,7 @@ renderer.domElement.addEventListener('pointerup', stopPointerDrag);
 renderer.domElement.addEventListener('pointerleave', stopPointerDrag);
 renderer.domElement.addEventListener('pointercancel', stopPointerDrag);
 renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
+// --- End of camera listeners ---
 
 // --- Lights ---
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -129,7 +134,7 @@ floor.position.y = 0; // Position it at the origin
 floor.receiveShadow = true; // Allow the floor to receive shadows
 scene.add(floor);
 
-// --- Track + Environment Grouping (rough draft) ---
+// --- Track + Environment (unchanged) ---
 const trackGroup = new THREE.Group();
 trackGroup.name = 'trackGroup';
 
@@ -202,7 +207,7 @@ trackSectionsConfig.forEach((sectionConfig, index) => {
 
 scene.add(trackGroup);
 
-// --- City + Sky group placeholders ---
+// --- City + Sky (unchanged) ---
 const cityBlocks = new THREE.Group();
 cityBlocks.name = 'cityBlocks';
 const skyStuff = new THREE.Group();
@@ -312,75 +317,161 @@ skyStuff.position.set(0, 1, -5);
 
 scene.add(cityBlocks, skyStuff);
 
-// --- Controls (for easy testing) ---
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enabled = false;
-controls.target.copy(defaultCameraTarget);
-controls.update();
+// --- ✨ 2. Removed the old OrbitControls section ---
+// const controls = new OrbitControls(camera, renderer.domElement);
+// controls.enabled = true; 
+// controls.target.set(0, 2, -5);
+// controls.update();
 
-// --- ✨ Model Loader Logic ✨ ---
+// --- CarControls Class (unchanged) ---
+class CarControls {
+    constructor(model) {
+        this.model = model;
+        this.speed = 0;
+        this.maxSpeed = 1.0;
+        this.acceleration = 0.5;
+        this.brakeStrength = 2.0;
+        this.drag = 0.3;
+        this.steering = 0;
+        this.maxSteer = 0.8;
+        this.steerSpeed = 1.5;
+        this.keys = {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false
+        };
+        window.addEventListener('keydown', (e) => this.onKeyDown(e));
+        window.addEventListener('keyup', (e) => this.onKeyUp(e));
+    }
+    onKeyDown(event) {
+        switch (event.code) {
+            case 'KeyW':
+            case 'ArrowUp':
+                this.keys.forward = true;
+                break;
+            case 'KeyS':
+            case 'ArrowDown':
+                this.keys.backward = true;
+                break;
+            case 'KeyA':
+            case 'ArrowLeft':
+                this.keys.left = true;
+                break;
+            case 'KeyD':
+            case 'ArrowRight':
+                this.keys.right = true;
+                break;
+        }
+    }
+    onKeyUp(event) {
+        switch (event.code) {
+            case 'KeyW':
+            case 'ArrowUp':
+                this.keys.forward = false;
+                break;
+            case 'KeyS':
+            case 'ArrowDown':
+                this.keys.backward = false;
+                break;
+            case 'KeyA':
+            case 'ArrowLeft':
+                this.keys.left = false;
+                break;
+            case 'KeyD':
+            case 'ArrowRight':
+                this.keys.right = false;
+                break;
+        }
+    }
+    update(deltaTime) {
+        if (this.keys.left) {
+            this.steering += this.steerSpeed * deltaTime;
+        } else if (this.keys.right) {
+            this.steering -= this.steerSpeed * deltaTime;
+        } else {
+            if (this.steering > 0) {
+                this.steering -= this.steerSpeed * deltaTime;
+                this.steering = Math.max(0, this.steering);
+            } else if (this.steering < 0) {
+                this.steering += this.steerSpeed * deltaTime;
+                this.steering = Math.min(0, this.steering);
+            }
+        }
+        this.steering = THREE.MathUtils.clamp(this.steering, -this.maxSteer, this.maxSteer);
+
+        if (this.keys.forward) {
+            this.speed += this.acceleration * deltaTime;
+        } else if (this.keys.backward) {
+            this.speed -= this.brakeStrength * deltaTime;
+        } else {
+            if (this.speed > 0) {
+                this.speed -= this.drag * deltaTime;
+                this.speed = Math.max(0, this.speed);
+            } else if (this.speed < 0) {
+                this.speed += this.drag * deltaTime;
+                this.speed = Math.min(0, this.speed);
+            }
+        }
+        this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed / 2, this.maxSpeed);
+
+        if (Math.abs(this.speed) > 0.01) {
+            const steerAngle = this.steering * (this.speed / this.maxSpeed);
+            this.model.rotateY(steerAngle * deltaTime);
+        }
+        
+        // This is still correct (model's forward is -Z)
+        this.model.translateZ(-this.speed * deltaTime);
+    }
+}
+
+// --- carController variable (unchanged) ---
+let carController;
+
+// --- Model Loader Logic (unchanged) ---
 const loader = new GLTFLoader();
 
-// Set the path relative to index.html (which is in 'src')
-// No '..' or '/' needed.
 loader.setPath('cyberpunk_car/'); 
 
-// Load the file by name
 loader.load(
     'scene.gltf',
-    
-    // onLoad callback
     function (gltf) {
         console.log("Model loaded successfully:", gltf);
         const model = gltf.scene;
-
         model.scale.set(0.0035, 0.0035, 0.0035);
-
         model.traverse(function (node) {
             if (node.isMesh) {
                 node.castShadow = true;
             }
         });
-
-        const boundingBox = carBoundingBox.setFromObject(model);
-        boundingBox.getSize(carSize);
-        const maxDimension = Math.max(carSize.x, carSize.y, carSize.z);
-        const normalizedDimension = Math.max(maxDimension, 1);
-        minCameraDistance = normalizedDimension * 1.3;
-        maxCameraDistance = normalizedDimension * 3.8;
-        const preferredRadius = normalizedDimension * 2.1;
-        followSpherical.radius = THREE.MathUtils.clamp(
-            preferredRadius,
-            minCameraDistance,
-            maxCameraDistance
-        );
-        followSpherical.theta = 0;
-        followSpherical.phi = THREE.MathUtils.clamp(
-            THREE.MathUtils.degToRad(40),
-            minPolarAngle,
-            maxPolarAngle
-        );
-        lookAtOffset.y = Math.max(carSize.y * 0.75, 1.2);
         
         carModel = model;
         scene.add(model);
+        
+        // Initialize the CarControls (no change here)
+        carController = new CarControls(carModel);
     },
-    
-    // onProgress callback
     function (xhr) {
         console.log((xhr.loaded / xhr.total * 100) + '% loaded');
     },
-    
-    // onError callback
     function (error) {
         console.error('An error happened while loading the model:', error);
     }
 );
 
-// --- Render Loop ---
+// --- ✨ 3. UPDATED Render Loop ---
 function animate() {
     requestAnimationFrame(animate);
 
+    // Get time delta for physics
+    const deltaTime = clock.getDelta();
+
+    // ✨ 4. ADDED this block to update the car driving
+    if (carController) {
+        carController.update(deltaTime);
+    }
+
+    // This is your new custom camera logic (unchanged)
     if (carModel) {
         carModel.getWorldPosition(carWorldPosition);
         carModel.getWorldQuaternion(carWorldQuaternion);
@@ -406,12 +497,12 @@ function animate() {
     renderer.render(scene, camera);
 }
 
-// Handle window resize
+// Handle window resize (unchanged)
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 }, false);
 
-// Start the animation
+// Start the animation (unchanged)
 animate();
