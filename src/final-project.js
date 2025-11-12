@@ -15,20 +15,98 @@ camera.position.copy(defaultCameraPosition);
 camera.lookAt(defaultCameraTarget);
 
 // Camera follow helpers
-const chaseOffset = new THREE.Vector3(0, 4, 10);
-const lookOffset = new THREE.Vector3(0, 1.5, -4);
 const chaseLerpFactor = 0.12;
 const idleLerpFactor = 0.05;
-const chaseCameraPosition = new THREE.Vector3();
-const chaseLookAt = new THREE.Vector3();
 const carWorldPosition = new THREE.Vector3();
 const carWorldQuaternion = new THREE.Quaternion();
 let carModel = null;
+
+// Camera / car sizing helpers
+const carBoundingBox = new THREE.Box3();
+const carSize = new THREE.Vector3();
+const followSpherical = new THREE.Spherical(8, THREE.MathUtils.degToRad(42), 0);
+let minCameraDistance = 4;
+let maxCameraDistance = 30;
+const minPolarAngle = THREE.MathUtils.degToRad(20);
+const maxPolarAngle = THREE.MathUtils.degToRad(70);
+const pointerRotationSpeed = 0.0055;
+const scrollZoomFactor = 0.004;
+const relativeCameraOffset = new THREE.Vector3();
+const desiredCameraPosition = new THREE.Vector3();
+const lookAtOffset = new THREE.Vector3(0, 1.5, 0);
+const lookAtTarget = new THREE.Vector3();
+const pointerState = {
+    dragging: false,
+    pointerId: null,
+    lastX: 0,
+    lastY: 0
+};
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.shadowMap.enabled = true; // Enable shadows
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
+renderer.domElement.style.cursor = 'grab';
+renderer.domElement.style.touchAction = 'none';
+
+const releasePointerCapture = (event) => {
+    if (renderer.domElement.hasPointerCapture && renderer.domElement.hasPointerCapture(event.pointerId)) {
+        renderer.domElement.releasePointerCapture(event.pointerId);
+    }
+};
+
+const stopPointerDrag = (event) => {
+    if (pointerState.pointerId !== event.pointerId) {
+        return;
+    }
+    pointerState.dragging = false;
+    pointerState.pointerId = null;
+    renderer.domElement.style.cursor = 'grab';
+    releasePointerCapture(event);
+};
+
+const onPointerDown = (event) => {
+    if (event.button !== 0) return;
+    pointerState.dragging = true;
+    pointerState.pointerId = event.pointerId;
+    pointerState.lastX = event.clientX;
+    pointerState.lastY = event.clientY;
+    renderer.domElement.setPointerCapture(event.pointerId);
+    renderer.domElement.style.cursor = 'grabbing';
+};
+
+const onPointerMove = (event) => {
+    if (!pointerState.dragging || pointerState.pointerId !== event.pointerId) {
+        return;
+    }
+    event.preventDefault();
+    const deltaX = event.clientX - pointerState.lastX;
+    const deltaY = event.clientY - pointerState.lastY;
+    followSpherical.theta -= deltaX * pointerRotationSpeed;
+    followSpherical.phi = THREE.MathUtils.clamp(
+        followSpherical.phi + deltaY * pointerRotationSpeed,
+        minPolarAngle,
+        maxPolarAngle
+    );
+    pointerState.lastX = event.clientX;
+    pointerState.lastY = event.clientY;
+};
+
+const onWheel = (event) => {
+    event.preventDefault();
+    followSpherical.radius = THREE.MathUtils.clamp(
+        followSpherical.radius + event.deltaY * scrollZoomFactor,
+        minCameraDistance,
+        maxCameraDistance
+    );
+};
+
+renderer.domElement.addEventListener('pointerdown', onPointerDown);
+renderer.domElement.addEventListener('pointermove', onPointerMove);
+renderer.domElement.addEventListener('pointerup', stopPointerDrag);
+renderer.domElement.addEventListener('pointerleave', stopPointerDrag);
+renderer.domElement.addEventListener('pointercancel', stopPointerDrag);
+renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
 // --- Lights ---
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -263,6 +341,26 @@ loader.load(
                 node.castShadow = true;
             }
         });
+
+        const boundingBox = carBoundingBox.setFromObject(model);
+        boundingBox.getSize(carSize);
+        const maxDimension = Math.max(carSize.x, carSize.y, carSize.z);
+        const normalizedDimension = Math.max(maxDimension, 1);
+        minCameraDistance = normalizedDimension * 1.3;
+        maxCameraDistance = normalizedDimension * 3.8;
+        const preferredRadius = normalizedDimension * 2.1;
+        followSpherical.radius = THREE.MathUtils.clamp(
+            preferredRadius,
+            minCameraDistance,
+            maxCameraDistance
+        );
+        followSpherical.theta = 0;
+        followSpherical.phi = THREE.MathUtils.clamp(
+            THREE.MathUtils.degToRad(40),
+            minPolarAngle,
+            maxPolarAngle
+        );
+        lookAtOffset.y = Math.max(carSize.y * 0.75, 1.2);
         
         carModel = model;
         scene.add(model);
@@ -287,11 +385,19 @@ function animate() {
         carModel.getWorldPosition(carWorldPosition);
         carModel.getWorldQuaternion(carWorldQuaternion);
 
-        chaseCameraPosition.copy(chaseOffset).applyQuaternion(carWorldQuaternion).add(carWorldPosition);
-        camera.position.lerp(chaseCameraPosition, chaseLerpFactor);
+        followSpherical.radius = THREE.MathUtils.clamp(
+            followSpherical.radius,
+            minCameraDistance,
+            maxCameraDistance
+        );
+        relativeCameraOffset.setFromSpherical(followSpherical);
+        relativeCameraOffset.applyQuaternion(carWorldQuaternion);
 
-        chaseLookAt.copy(lookOffset).applyQuaternion(carWorldQuaternion).add(carWorldPosition);
-        camera.lookAt(chaseLookAt);
+        desiredCameraPosition.copy(carWorldPosition).add(relativeCameraOffset);
+        camera.position.lerp(desiredCameraPosition, chaseLerpFactor);
+
+        lookAtTarget.copy(carWorldPosition).add(lookAtOffset);
+        camera.lookAt(lookAtTarget);
     } else {
         camera.position.lerp(defaultCameraPosition, idleLerpFactor);
         camera.lookAt(defaultCameraTarget);
