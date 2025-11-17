@@ -623,7 +623,7 @@ scene.add(cityBlocks, skyStuff);
 // controls.target.set(0, 2, -5);
 // controls.update();
 
-// --- CarControls Class ---
+// --- CarControls Class (Updated for Responsive Steering) ---
 class CarControls {
     constructor(model, trackGuard, engineAudio) {
         this.model = model;
@@ -635,8 +635,12 @@ class CarControls {
         this.brakeStrength = 3.2;
         this.drag = 0.45;
         this.steering = 0;
-        this.maxSteer = 0.9;
-        this.steerSpeed = 2.4;
+        
+        // --- 💡 CHANGED VALUES ---
+        this.maxSteer = 1.0; // Was 0.9
+        this.steerSpeed = 3.0; // Was 2.4
+        // --- END OF CHANGES ---
+
         this.forwardVector = new THREE.Vector3(0, 0, -1);
         this.movementVector = new THREE.Vector3();
         this.proposedPosition = new THREE.Vector3();
@@ -722,7 +726,12 @@ class CarControls {
         this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed / 2, this.maxSpeed);
 
         if (Math.abs(this.speed) > 0.01) {
-            const steerAngle = this.steering * (this.speed / this.maxSpeed);
+            // --- 💡 THIS IS THE MAIN FIX ---
+            // We removed the "*(this.speed / this.maxSpeed)" part
+            // to allow for sharp turns at any speed.
+            const steerAngle = this.steering; 
+            // --- END OF FIX ---
+            
             this.model.rotateY(steerAngle * deltaTime);
         }
 
@@ -732,6 +741,12 @@ class CarControls {
             this.movementVector.copy(this.forwardVector).multiplyScalar(moveDistance);
             this.proposedPosition.copy(this.model.position).add(this.movementVector);
 
+            // Using the "free drive" mode we set up before.
+            // Remember to re-enable your trackGuard if you want boundaries!
+            this.model.position.copy(this.proposedPosition);
+            this.previousValidPosition.copy(this.proposedPosition);
+
+            /* --- Your original boundary code ---
             if (this.trackGuard.contains(this.proposedPosition.x, this.proposedPosition.z)) {
                 this.model.position.copy(this.proposedPosition);
                 this.previousValidPosition.copy(this.proposedPosition);
@@ -739,6 +754,8 @@ class CarControls {
                 this.speed = 0;
                 this.model.position.copy(this.previousValidPosition);
             }
+            */
+            
         } else {
             this.previousValidPosition.copy(this.model.position);
         }
