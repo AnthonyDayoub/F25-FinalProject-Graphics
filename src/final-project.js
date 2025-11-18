@@ -6,8 +6,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { AfterimagePass } from 'three/addons/postprocessing/AfterimagePass.js';
 import { FilmPass } from 'three/addons/postprocessing/FilmPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-// Import orbit controls for testing
-// import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; // ✨ Removed, you have a custom camera
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 
 // ✨ 1. Added Clock for physics
 const clock = new THREE.Clock();
@@ -34,11 +34,9 @@ const carWorldQuaternion = new THREE.Quaternion();
 let carModel = null;
 
 // Camera / car sizing helpers
-// const carBoundingBox = new THREE.Box3(); // Unused, can remove if you want
-// const carSize = new THREE.Vector3(); // Unused, can remove if you want
 const followSpherical = new THREE.Spherical(8, THREE.MathUtils.degToRad(42), 0);
 let minCameraDistance = 4;
-let maxCameraDistance = 0;
+let maxCameraDistance = 10; // set a sane default instead of 0
 const minPolarAngle = THREE.MathUtils.degToRad(20);
 const maxPolarAngle = THREE.MathUtils.degToRad(70);
 const pointerRotationSpeed = 0.0055;
@@ -152,7 +150,7 @@ composer.addPass(afterimagePass);
 const filmPass = new FilmPass(0.45, 0.025, 648, false);
 composer.addPass(filmPass);
 
-// --- All your custom camera event listeners (unchanged) ---
+// --- Pointer / camera events ---
 const releasePointerCapture = (event) => {
     if (renderer.domElement.hasPointerCapture && renderer.domElement.hasPointerCapture(event.pointerId)) {
         renderer.domElement.releasePointerCapture(event.pointerId);
@@ -211,7 +209,6 @@ renderer.domElement.addEventListener('pointerup', stopPointerDrag);
 renderer.domElement.addEventListener('pointerleave', stopPointerDrag);
 renderer.domElement.addEventListener('pointercancel', stopPointerDrag);
 renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
-// --- End of camera listeners ---
 
 // --- Lights ---
 const hemiLight = new THREE.HemisphereLight(0x0f1f3c, 0x010101, 0.55);
@@ -231,13 +228,13 @@ scene.add(rimLight);
 // --- Floor ---
 const floorGeometry = new THREE.PlaneGeometry(100, 100);
 const floorMaterial = new THREE.MeshStandardMaterial({
-    color: 0x491057, 
+    color: 0x491057,
     side: THREE.DoubleSide
 });
 const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-floor.rotation.x = -Math.PI / 2; // Rotate it to be horizontal
-floor.position.y = 0; // Position it at the origin
-floor.receiveShadow = true; // Allow the floor to receive shadows
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = 0;
+floor.receiveShadow = true;
 scene.add(floor);
 
 // --- Track + Environment (cyber F1 loop) ---
@@ -617,13 +614,7 @@ skyStuff.position.set(0, 1, -8);
 
 scene.add(cityBlocks, skyStuff);
 
-// --- ✨ 2. Removed the old OrbitControls section ---
-// const controls = new OrbitControls(camera, renderer.domElement);
-// controls.enabled = true; 
-// controls.target.set(0, 2, -5);
-// controls.update();
-
-// --- CarControls Class (Updated for Responsive Steering) ---
+// --- CarControls Class ---
 class CarControls {
     constructor(model, trackGuard, engineAudio) {
         this.model = model;
@@ -635,11 +626,9 @@ class CarControls {
         this.brakeStrength = 3.2;
         this.drag = 0.45;
         this.steering = 0;
-        
-        // --- 💡 CHANGED VALUES ---
-        this.maxSteer = 1.0; // Was 0.9
-        this.steerSpeed = 3.0; // Was 2.4
-        // --- END OF CHANGES ---
+
+        this.maxSteer = 1.0;
+        this.steerSpeed = 3.0;
 
         this.forwardVector = new THREE.Vector3(0, 0, -1);
         this.movementVector = new THREE.Vector3();
@@ -726,12 +715,7 @@ class CarControls {
         this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed / 2, this.maxSpeed);
 
         if (Math.abs(this.speed) > 0.01) {
-            // --- 💡 THIS IS THE MAIN FIX ---
-            // We removed the "*(this.speed / this.maxSpeed)" part
-            // to allow for sharp turns at any speed.
-            const steerAngle = this.steering; 
-            // --- END OF FIX ---
-            
+            const steerAngle = this.steering;
             this.model.rotateY(steerAngle * deltaTime);
         }
 
@@ -741,21 +725,9 @@ class CarControls {
             this.movementVector.copy(this.forwardVector).multiplyScalar(moveDistance);
             this.proposedPosition.copy(this.model.position).add(this.movementVector);
 
-            // Using the "free drive" mode we set up before.
-            // Remember to re-enable your trackGuard if you want boundaries!
+            // Free drive
             this.model.position.copy(this.proposedPosition);
             this.previousValidPosition.copy(this.proposedPosition);
-
-            /* --- Your original boundary code ---
-            if (this.trackGuard.contains(this.proposedPosition.x, this.proposedPosition.z)) {
-                this.model.position.copy(this.proposedPosition);
-                this.previousValidPosition.copy(this.proposedPosition);
-            } else {
-                this.speed = 0;
-                this.model.position.copy(this.previousValidPosition);
-            }
-            */
-            
         } else {
             this.previousValidPosition.copy(this.model.position);
         }
@@ -768,18 +740,17 @@ class CarControls {
     }
 }
 
-// --- carController variable (unchanged) ---
+// --- carController variable ---
 let carController;
 
-// --- Model Loader Logic (unchanged) ---
+// --- Model Loader Logic (car) ---
 const loader = new GLTFLoader();
-
-loader.setPath('cyberpunk_car/'); 
+loader.setPath('cyberpunk_car/');
 
 loader.load(
     'scene.gltf',
     function (gltf) {
-        console.log("Model loaded successfully:", gltf);
+        console.log("Car model loaded successfully:", gltf);
         const model = gltf.scene;
         model.scale.set(0.0035, 0.0035, 0.0035);
         model.traverse(function (node) {
@@ -787,10 +758,10 @@ loader.load(
                 node.castShadow = true;
             }
         });
-        
+
         carModel = model;
         scene.add(model);
-        
+
         // Initialize the CarControls with track boundary helper
         carController = new CarControls(carModel, trackBoundaryHelper);
     },
@@ -798,23 +769,50 @@ loader.load(
         console.log((xhr.loaded / xhr.total * 100) + '% loaded');
     },
     function (error) {
-        console.error('An error happened while loading the model:', error);
+        console.error('An error happened while loading the car model:', error);
     }
 );
 
-// --- ✨ 3. UPDATED Render Loop ---
+// --- Mario Kart / Level background ---
+export function levelOneBackground() {
+    console.log('levelOneBackground() called');
+
+    const draco = new DRACOLoader();
+    draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+    const trackLoader = new GLTFLoader();
+    trackLoader.setDRACOLoader(draco);
+    trackLoader.setPath('mario_kart_8_deluxe_-_wii_moonview_highway/');
+
+    const rgbe = new RGBELoader();
+    rgbe.load('/textures/sky.hdr', (hdr) => {
+        hdr.mapping = THREE.EquirectangularReflectionMapping;
+        scene.environment = hdr;
+        scene.background = hdr;
+    });
+
+    trackLoader.load(
+        'scene.gltf',
+        (gltf) => {
+            console.log('Mario Kart map loaded');
+            const model = gltf.scene;
+            model.scale.set(0.01, 0.01, 0.01);
+            scene.add(model);
+        },
+        undefined,
+        (err) => console.error('Mario Kart GLTF load error:', err)
+    );
+}
+
+// --- Render Loop ---
 function animate() {
     requestAnimationFrame(animate);
 
-    // Get time delta for physics
     const deltaTime = clock.getDelta();
 
-    // ✨ 4. ADDED this block to update the car driving
     if (carController) {
         carController.update(deltaTime);
     }
 
-    // This is your new custom camera logic (unchanged)
     if (carModel) {
         carModel.getWorldPosition(carWorldPosition);
         carModel.getWorldQuaternion(carWorldQuaternion);
@@ -840,12 +838,15 @@ function animate() {
     renderer.render(scene, camera);
 }
 
-// Handle window resize (unchanged)
+// Handle window resize
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 }, false);
 
-// Start the animation (unchanged)
+// Start the animation
 animate();
+
+// Auto-load Mario Kart map so it actually appears
+levelOneBackground();

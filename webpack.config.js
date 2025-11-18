@@ -1,6 +1,7 @@
 /* global module, require, __dirname */
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = {
     entry: {
@@ -41,6 +42,12 @@ module.exports = {
             // --- FIX 1 ---
             // Point to the correct entry chunk name
             chunks: ['final-project'], 
+        }),
+        new CopyWebpackPlugin({
+            patterns: [
+                { from: path.resolve(__dirname, 'src/cyberpunk_car'), to: 'cyberpunk_car' },
+                { from: path.resolve(__dirname, 'src/mario_kart_8_deluxe_-_wii_moonview_highway'), to: 'mario_kart_8_deluxe_-_wii_moonview_highway' },
+            ],
         }),
     ],
     devServer: {
