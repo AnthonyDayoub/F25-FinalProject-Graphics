@@ -2,13 +2,59 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Three.js Model Loader</title>
+    <title>Three.js Racing</title>
     <style>
-        body { margin: 0; }
+        body { margin: 0; overflow: hidden; }
         canvas { display: block; }
+        
+        /* ✨ UI Styles */
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7); /* Semi-transparent black */
+            color: #00ffcc; /* Cyberpunk green text */
+            padding: 15px;
+            font-family: 'Courier New', Courier, monospace;
+            border-radius: 8px;
+            border: 1px solid #00ffcc;
+            pointer-events: auto; /* Ensures button is clickable */
+            user-select: none;
+        }
+        
+        .data-row {
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        button {
+            margin-top: 10px;
+            background: #ff0055;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+            text-transform: uppercase;
+            border-radius: 4px;
+            width: 100%;
+        }
+
+        button:hover {
+            background: #ff4477;
+        }
     </style>
 </head>
 <body>
+    <div id="ui-container">
+        <div class="data-row">SPEED: <span id="speed-display">0.0</span></div>
+        <div class="data-row">POS X: <span id="pos-x">0</span></div>
+        <div class="data-row">POS Y: <span id="pos-y">0</span></div>
+        <div class="data-row">POS Z: <span id="pos-z">0</span></div>
+        <button id="reset-btn">RESET CAR</button>
+    </div>
+
     <script type="importmap">
     {
         "imports": {
