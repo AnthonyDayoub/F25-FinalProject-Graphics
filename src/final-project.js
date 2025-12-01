@@ -148,6 +148,7 @@ keyLight.shadow.camera.bottom = -100;
 scene.add(keyLight);
 
 // --- CarControls Class ---
+// --- CarControls Class ---
 class CarControls {
     constructor(model, idleSoundRef, accelerationSoundRef) {
         this.model = model;
@@ -160,6 +161,9 @@ class CarControls {
         this.maxSteer = 0.04;
         
         this.velocity = new THREE.Vector3();
+        
+        // ✨ NEW: Vector to track the direction of MOMENTUM (separate from car rotation)
+        this.moveDirection = new THREE.Vector3(0, 0, -1); 
         
         // Raycasters
         this.groundRaycaster = new THREE.Raycaster();
@@ -174,7 +178,8 @@ class CarControls {
         this.accelerationSound = accelerationSoundRef || null;
         this.engineSoundThreshold = 1;
 
-        this.keys = { forward: false, backward: false, left: false, right: false };
+        // ✨ NEW: Added 'space' to keys
+        this.keys = { forward: false, backward: false, left: false, right: false, space: false };
         window.addEventListener('keydown', (e) => this.onKeyDown(e));
         window.addEventListener('keyup', (e) => this.onKeyUp(e));
     }
@@ -185,15 +190,14 @@ class CarControls {
         this.updateEngineAudio(true);
     }
 
-    // ✨ New: Manual Reset Function
     manualReset() {
         this.speed = 0;
         this.velocity.set(0, 0, 0);
-        // Reset to spawn point high in the sky
         this.model.position.set(0, 20, 0); 
         this.model.rotation.set(0, 0, 0);
-        // Reset safe position too
         this.lastSafePosition.set(0, 20, 0);
+        // ✨ Reset movement vector on respawn
+        this.moveDirection.set(0, 0, -1);
         this.updateEngineAudio(true);
     }
 
@@ -203,6 +207,7 @@ class CarControls {
         case 'KeyS': case 'ArrowDown': this.keys.backward = true; break;
         case 'KeyA': case 'ArrowLeft': this.keys.left = true; break;
         case 'KeyD': case 'ArrowRight': this.keys.right = true; break;
+        case 'Space': this.keys.space = true; break; // ✨ Detect Space
         }
     }
 
@@ -212,6 +217,7 @@ class CarControls {
         case 'KeyS': case 'ArrowDown': this.keys.backward = false; break;
         case 'KeyA': case 'ArrowLeft': this.keys.left = false; break;
         case 'KeyD': case 'ArrowRight': this.keys.right = false; break;
+        case 'Space': this.keys.space = false; break; // ✨ Detect Space
         }
     }
 
@@ -226,9 +232,16 @@ class CarControls {
         }
         this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed / 2, this.maxSpeed);
 
+        // ✨ NEW: Check Drift State
+        // You can only drift if moving forward fast enough
+        const isDrifting = this.keys.space && this.speed > 10;
+        
         // 2. Steering
-        if (this.keys.left) this.steering = this.maxSteer;
-        else if (this.keys.right) this.steering = -this.maxSteer;
+        // While drifting, we allow sharper steering to emphasize the slide
+        const steerMultiplier = isDrifting ? 1.5 : 1.0;
+
+        if (this.keys.left) this.steering = this.maxSteer * steerMultiplier;
+        else if (this.keys.right) this.steering = -this.maxSteer * steerMultiplier;
         else this.steering = 0;
 
         if (Math.abs(this.speed) > 0.1) {
@@ -237,6 +250,7 @@ class CarControls {
 
         // 3. Detect Wall Collisions
         if (Math.abs(this.speed) > 0.1) {
+            // We check wall collisions based on where the MODEL is facing
             const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.model.quaternion);
             if (this.speed < 0) forwardDir.negate(); 
 
@@ -251,10 +265,28 @@ class CarControls {
             }
         }
 
-        // 4. Apply Movement Vector
-        const forwardVec = new THREE.Vector3(0, 0, -1).applyQuaternion(this.model.quaternion);
-        this.velocity.x = forwardVec.x * this.speed;
-        this.velocity.z = forwardVec.z * this.speed;
+        // 4. Apply Movement Vector (THE DRIFT LOGIC)
+        // Get the direction the 3D model is currently facing
+        const carFacingDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.model.quaternion);
+        
+        // "Grip" determines how strictly the car follows its rotation.
+        // High grip (0.8) = Car goes where it looks (Normal driving).
+        // Low grip (0.02) = Car slides on ice/drifts (Movement vector lags behind rotation).
+        const gripFactor = isDrifting ? 0.1 : 0.8;
+
+        // Linearly interpolate the MOVEMENT direction towards the FACING direction
+        // This creates the "slide" effect.
+        this.moveDirection.lerp(carFacingDir, gripFactor).normalize();
+
+        // If reversing, we usually want inverted control, but for simplicity
+        // we lock movement to facing direction when going slow/reverse to prevent bugs.
+        if (this.speed < 5) {
+            this.moveDirection.copy(carFacingDir);
+        }
+
+        // Apply speed to the Calculated Drift Direction, NOT the model's rotation
+        this.velocity.x = this.moveDirection.x * this.speed;
+        this.velocity.z = this.moveDirection.z * this.speed;
         this.velocity.y -= this.gravity * deltaTime; 
 
         // 5. Ground Collision
@@ -292,11 +324,13 @@ class CarControls {
         if(this.model.position.y < -50) {
             console.log("Fell into void! Respawning at safe spot...");
             this.model.position.copy(this.lastSafePosition);
+            this.model.quaternion.copy(this.lastSafeQuaternion); // Restore rotation too
+            this.moveDirection.set(0,0,-1).applyQuaternion(this.lastSafeQuaternion); // Restore vector
             this.speed = 0;
             this.velocity.set(0,0,0);
         }
 
-        // ✨ 8. UPDATE UI
+        // 8. UPDATE UI
         uiSpeed.innerText = Math.abs(this.speed).toFixed(1);
         uiPosX.innerText = this.model.position.x.toFixed(1);
         uiPosY.innerText = this.model.position.y.toFixed(1);
