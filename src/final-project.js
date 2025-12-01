@@ -31,7 +31,7 @@ const listener = new THREE.AudioListener();
 camera.add(listener);
 
 // Camera follow helpers
-const chaseLerpFactor = 0.12;
+const chaseLerpFactor = 1.2;
 const carWorldPosition = new THREE.Vector3();
 const carWorldQuaternion = new THREE.Quaternion();
 let carModel = null;
@@ -169,19 +169,19 @@ class CarControls {
 
     onKeyDown(event) {
         switch (event.code) {
-            case 'KeyW': case 'ArrowUp': this.keys.forward = true; break;
-            case 'KeyS': case 'ArrowDown': this.keys.backward = true; break;
-            case 'KeyA': case 'ArrowLeft': this.keys.left = true; break;
-            case 'KeyD': case 'ArrowRight': this.keys.right = true; break;
+        case 'KeyW': case 'ArrowUp': this.keys.forward = true; break;
+        case 'KeyS': case 'ArrowDown': this.keys.backward = true; break;
+        case 'KeyA': case 'ArrowLeft': this.keys.left = true; break;
+        case 'KeyD': case 'ArrowRight': this.keys.right = true; break;
         }
     }
 
     onKeyUp(event) {
         switch (event.code) {
-            case 'KeyW': case 'ArrowUp': this.keys.forward = false; break;
-            case 'KeyS': case 'ArrowDown': this.keys.backward = false; break;
-            case 'KeyA': case 'ArrowLeft': this.keys.left = false; break;
-            case 'KeyD': case 'ArrowRight': this.keys.right = false; break;
+        case 'KeyW': case 'ArrowUp': this.keys.forward = false; break;
+        case 'KeyS': case 'ArrowDown': this.keys.backward = false; break;
+        case 'KeyA': case 'ArrowLeft': this.keys.left = false; break;
+        case 'KeyD': case 'ArrowRight': this.keys.right = false; break;
         }
     }
 
@@ -202,7 +202,7 @@ class CarControls {
         else this.steering = 0;
 
         if (Math.abs(this.speed) > 0.1) {
-             this.model.rotation.y += this.steering * (this.speed > 0 ? 1 : -1);
+            this.model.rotation.y += this.steering * (this.speed > 0 ? 1 : -1);
         }
 
         // 3. Detect Wall Collisions
