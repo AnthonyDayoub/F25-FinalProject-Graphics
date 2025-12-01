@@ -29,6 +29,26 @@ camera.lookAt(defaultCameraTarget);
 
 const listener = new THREE.AudioListener();
 camera.add(listener);
+const audioLoader = new THREE.AudioLoader();
+const idleSound = new THREE.Audio(listener);
+const accelerationSound = new THREE.Audio(listener);
+const tryAttachAudio = () => {
+    if (carController && idleSound.buffer && accelerationSound.buffer) {
+        carController.setEngineAudio(idleSound, accelerationSound);
+    }
+};
+audioLoader.load('idle.mp3', (buffer) => {
+    idleSound.setBuffer(buffer);
+    idleSound.setLoop(true);
+    idleSound.setVolume(0.35);
+    tryAttachAudio();
+});
+audioLoader.load('acceleration.mp3', (buffer) => {
+    accelerationSound.setBuffer(buffer);
+    accelerationSound.setLoop(true);
+    accelerationSound.setVolume(0.35);
+    tryAttachAudio();
+});
 
 // Camera follow helpers
 const chaseLerpFactor = 1.2;
@@ -129,7 +149,7 @@ scene.add(keyLight);
 
 // --- CarControls Class ---
 class CarControls {
-    constructor(model) {
+    constructor(model, idleSoundRef, accelerationSoundRef) {
         this.model = model;
         this.speed = 0;
         this.maxSpeed = 60; 
@@ -150,10 +170,19 @@ class CarControls {
 
         this.lastSafePosition = new THREE.Vector3(0, 30, 0);
         this.lastSafeQuaternion = new THREE.Quaternion();
+        this.idleSound = idleSoundRef || null;
+        this.accelerationSound = accelerationSoundRef || null;
+        this.engineSoundThreshold = 1;
 
         this.keys = { forward: false, backward: false, left: false, right: false };
         window.addEventListener('keydown', (e) => this.onKeyDown(e));
         window.addEventListener('keyup', (e) => this.onKeyUp(e));
+    }
+
+    setEngineAudio(idleAudio, accelerationAudio) {
+        this.idleSound = idleAudio;
+        this.accelerationSound = accelerationAudio;
+        this.updateEngineAudio(true);
     }
 
     // ✨ New: Manual Reset Function
@@ -165,6 +194,7 @@ class CarControls {
         this.model.rotation.set(0, 0, 0);
         // Reset safe position too
         this.lastSafePosition.set(0, 20, 0);
+        this.updateEngineAudio(true);
     }
 
     onKeyDown(event) {
@@ -271,6 +301,23 @@ class CarControls {
         uiPosX.innerText = this.model.position.x.toFixed(1);
         uiPosY.innerText = this.model.position.y.toFixed(1);
         uiPosZ.innerText = this.model.position.z.toFixed(1);
+
+        this.updateEngineAudio();
+    }
+
+    updateEngineAudio(forceIdle = false) {
+        if (!this.idleSound || !this.accelerationSound) return;
+        if (!this.idleSound.buffer || !this.accelerationSound.buffer) return;
+
+        const moving = Math.abs(this.speed) > this.engineSoundThreshold;
+
+        if (forceIdle || !moving) {
+            if (this.accelerationSound.isPlaying) this.accelerationSound.stop();
+            if (!this.idleSound.isPlaying) this.idleSound.play();
+        } else {
+            if (this.idleSound.isPlaying) this.idleSound.stop();
+            if (!this.accelerationSound.isPlaying) this.accelerationSound.play();
+        }
     }
 }
 
@@ -334,7 +381,8 @@ loader.load(
         carModel = model;
         scene.add(model);
 
-        carController = new CarControls(carModel);
+        carController = new CarControls(carModel, idleSound, accelerationSound);
+        tryAttachAudio();
     },
     undefined,
     function (error) { console.error('Car load error:', error); }
