@@ -29,6 +29,7 @@ camera.lookAt(defaultCameraTarget);
 
 const listener = new THREE.AudioListener();
 camera.add(listener);
+let carController = null;
 const audioLoader = new THREE.AudioLoader();
 const idleSound = new THREE.Audio(listener);
 const accelerationSound = new THREE.Audio(listener);
@@ -322,6 +323,7 @@ class CarControls {
         
         // 7. Void Respawn
         if(this.model.position.y < -50) {
+            // eslint-disable-next-line no-console
             console.log("Fell into void! Respawning at safe spot...");
             this.model.position.copy(this.lastSafePosition);
             this.model.quaternion.copy(this.lastSafeQuaternion); // Restore rotation too
@@ -355,8 +357,6 @@ class CarControls {
     }
 }
 
-let carController;
-
 // --- Loaders ---
 export function levelOneBackground() {
     const draco = new DRACOLoader();
@@ -375,6 +375,7 @@ export function levelOneBackground() {
     trackLoader.load(
         'scene.gltf',
         (gltf) => {
+            // eslint-disable-next-line no-console
             console.log('Mario Kart map loaded');
             const model = gltf.scene;
             
@@ -390,7 +391,8 @@ export function levelOneBackground() {
                 }
             });
         },
-        undefined,
+        null,
+        // eslint-disable-next-line no-console
         (err) => console.error('Mario Kart GLTF load error:', err)
     );
 }
@@ -402,6 +404,7 @@ loader.setPath('cyberpunk_car/');
 loader.load(
     'scene.gltf',
     function (gltf) {
+        // eslint-disable-next-line no-console
         console.log("Car model loaded");
         const model = gltf.scene;
         
@@ -418,7 +421,8 @@ loader.load(
         carController = new CarControls(carModel, idleSound, accelerationSound);
         tryAttachAudio();
     },
-    undefined,
+    null,
+    // eslint-disable-next-line no-console
     function (error) { console.error('Car load error:', error); }
 );
 
