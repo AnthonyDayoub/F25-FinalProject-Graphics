@@ -148,7 +148,52 @@ keyLight.shadow.camera.top = 100;
 keyLight.shadow.camera.bottom = -100;
 scene.add(keyLight);
 
-// --- CarControls Class ---
+// --- Map sectoring (runtime chunking) ---
+const trackSectors = [];
+const trackSectorMap = new Map();
+const sectorWorkVec = new THREE.Vector3();
+const trackSectorSize = 200; // world units per sector bucket
+let trackRenderDistance = 400; // distance from car to show a sector
+let sectorCullingEnabled = true;
+
+function addMeshToSector(mesh) {
+    const pos = mesh.position;
+    const keyX = Math.floor(pos.x / trackSectorSize);
+    const keyZ = Math.floor(pos.z / trackSectorSize);
+    const key = `${keyX}:${keyZ}`;
+
+    let sector = trackSectorMap.get(key);
+    if (!sector) {
+        sector = { key, meshes: [], anchor: null };
+        trackSectorMap.set(key, sector);
+        trackSectors.push(sector);
+    }
+
+    sector.meshes.push(mesh);
+    if (!sector.anchor) sector.anchor = mesh;
+    mesh.frustumCulled = true;
+}
+
+function updateSectorVisibility(carPos) {
+    if (!sectorCullingEnabled || !trackSectors.length) return;
+    trackSectors.forEach((sector) => {
+        if (!sector.anchor) return;
+        sector.anchor.getWorldPosition(sectorWorkVec);
+        const visible = carPos.distanceTo(sectorWorkVec) < trackRenderDistance;
+        sector.meshes.forEach((mesh) => {
+            mesh.visible = visible;
+        });
+    });
+}
+
+function forceAllSectorsVisible() {
+    trackSectors.forEach((sector) => {
+        sector.meshes.forEach((mesh) => {
+            mesh.visible = true;
+        });
+    });
+}
+
 // --- CarControls Class ---
 class CarControls {
     constructor(model, idleSoundRef, accelerationSoundRef) {
@@ -388,8 +433,15 @@ export function levelOneBackground() {
                     child.receiveShadow = true;
                     child.castShadow = true;
                     mapColliders.push(child);
+                    addMeshToSector(child);
                 }
             });
+
+            // If we only have a single sector, disable culling to avoid hiding the whole map.
+            if (trackSectors.length <= 1) {
+                sectorCullingEnabled = false;
+                forceAllSectorsVisible();
+            }
         },
         null,
         // eslint-disable-next-line no-console
@@ -449,6 +501,8 @@ function animate() {
     if (carModel) {
         carModel.getWorldPosition(carWorldPosition);
         carModel.getWorldQuaternion(carWorldQuaternion);
+
+        updateSectorVisibility(carWorldPosition);
 
         followSpherical.radius = THREE.MathUtils.clamp(
             followSpherical.radius,
