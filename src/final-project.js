@@ -3,7 +3,6 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 const clock = new THREE.Clock();
@@ -98,8 +97,6 @@ renderer.domElement.style.touchAction = 'none';
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-const pmremGenerator = new THREE.PMREMGenerator(renderer);
-const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.environment = null; // Neon style
 
 const composer = new EffectComposer(renderer);
@@ -336,7 +333,7 @@ class TimeTrialManager {
 
         // ✨ VISUAL DEBUGGER: This draws red spheres so you can SEE the checkpoints
         this.debugMeshes = [];
-        this.checkpoints.forEach((cp, index) => {
+        this.checkpoints.forEach((cp) => {
             const geometry = new THREE.SphereGeometry(cp.radius, 16, 16);
             const material = new THREE.MeshBasicMaterial({ 
                 color: cp.isFinish ? 0x00ff00 : 0xff0000, // Green for finish, Red for others
@@ -420,7 +417,7 @@ class CarControls {
     constructor(model, idleSoundRef, accelerationSoundRef) {
         this.model = model;
         this.speed = 0;
-        this.maxSpeed = 60; 
+        this.maxSpeed = 100; 
         this.acceleration = 30;
         this.brakeStrength = 40;
         this.drag = 0.5;
