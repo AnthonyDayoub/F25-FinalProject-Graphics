@@ -5,7 +5,6 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 
 const clock = new THREE.Clock();
 
@@ -15,6 +14,20 @@ const uiPosX = document.getElementById('pos-x');
 const uiPosY = document.getElementById('pos-y');
 const uiPosZ = document.getElementById('pos-z');
 const btnReset = document.getElementById('reset-btn');
+
+// --- Time Trial UI ---
+const uiTimeCurrent = document.getElementById('time-current');
+const uiTimeBest = document.getElementById('time-best');
+const uiLapCount = document.getElementById('lap-count');
+
+// --- Helper: Format Time ---
+function formatTime(seconds) {
+    if (seconds === Infinity) return "--:--.--";
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds * 100) % 100);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+}
 
 // --- Basic Scene Setup ---
 const scene = new THREE.Scene();
@@ -33,11 +46,13 @@ let carController = null;
 const audioLoader = new THREE.AudioLoader();
 const idleSound = new THREE.Audio(listener);
 const accelerationSound = new THREE.Audio(listener);
+
 const tryAttachAudio = () => {
     if (carController && idleSound.buffer && accelerationSound.buffer) {
         carController.setEngineAudio(idleSound, accelerationSound);
     }
 };
+
 audioLoader.load('idle.mp3', (buffer) => {
     idleSound.setBuffer(buffer);
     idleSound.setLoop(true);
@@ -85,8 +100,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const pmremGenerator = new THREE.PMREMGenerator(renderer);
 const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
-// Keep environment null for colored neon-only lighting; we avoid neutral white reflections.
-scene.environment = null;
+scene.environment = null; // Neon style
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -137,9 +151,8 @@ renderer.domElement.addEventListener('pointercancel', stopPointerDrag);
 renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
 // --- Lights ---
-// Futuristic wash: cyan/pink-only lighting (no neutral/white fill).
 function setupNeonLighting() {
-    const ambient = new THREE.AmbientLight(0x2a1036, 0.25); // pink-leaning ambient tint
+    const ambient = new THREE.AmbientLight(0x2a1036, 0.25); 
     scene.add(ambient);
 
     const cyanDir = new THREE.DirectionalLight(0x5cf7ff, 0.9);
@@ -154,7 +167,6 @@ function setupNeonLighting() {
 }
 setupNeonLighting();
 
-// City neon scatter: cyan/pink point lights across the play space for atmosphere.
 const cityNeonLights = [];
 function addCityNeonLights() {
     const lightSets = [
@@ -166,11 +178,6 @@ function addCityNeonLights() {
         { pos: new THREE.Vector3(-140, 30, -140), color: 0x5cf7ff },
         { pos: new THREE.Vector3(140, 30, -140), color: 0x5cf7ff },
         { pos: new THREE.Vector3(-140, 30, 140), color: 0xff5cf1 },
-        { pos: new THREE.Vector3(0, 50, 0), color: 0x84f0ff },
-        { pos: new THREE.Vector3(200, 25, 0), color: 0xff6adf },
-        { pos: new THREE.Vector3(-200, 25, 0), color: 0x6fe5ff },
-        { pos: new THREE.Vector3(0, 25, 200), color: 0xff6adf },
-        { pos: new THREE.Vector3(0, 25, -200), color: 0x6fe5ff },
     ];
 
     lightSets.forEach(({ pos, color }) => {
@@ -183,14 +190,14 @@ function addCityNeonLights() {
 }
 addCityNeonLights();
 
-// --- Map sectoring (runtime chunking) ---
+// --- Map sectoring ---
 const trackSectors = [];
 const trackSectorMap = new Map();
 const sectorWorkVec = new THREE.Vector3();
 const bboxHelper = new THREE.Box3();
 const sizeHelper = new THREE.Vector3();
-const trackSectorSize = 200; // world units per sector bucket
-let trackRenderDistance = 400; // distance from car to show a sector
+const trackSectorSize = 200; 
+let trackRenderDistance = 400; 
 let sectorCullingEnabled = true;
 const carBoundsHelper = new THREE.Box3();
 const carSizeHelper = new THREE.Vector3();
@@ -198,20 +205,17 @@ const carCenterHelper = new THREE.Vector3();
 
 function styleMeshForNeon(child) {
     if (!child.material) return;
-
-    // Classify mesh by its bounds to roughly separate track from tall buildings.
     bboxHelper.setFromObject(child);
     bboxHelper.getSize(sizeHelper);
     const isBuilding = sizeHelper.y > 15 && sizeHelper.y > sizeHelper.x * 0.7 && sizeHelper.y > sizeHelper.z * 0.7;
     const isTrack = !isBuilding && sizeHelper.y < 12 && (sizeHelper.x > 6 || sizeHelper.z > 6);
-    const treatAsTrack = isTrack || !isBuilding; // default to shiny track style if unsure
+    const treatAsTrack = isTrack || !isBuilding; 
     const neonPalette = [0x00c8ff, 0xff3fb3];
     const neonColor = neonPalette[child.id % neonPalette.length];
 
     const materials = Array.isArray(child.material) ? child.material : [child.material];
     const styled = materials.map((mat) => {
         const clone = mat.clone();
-        // Reduce mirror-like hotspots while keeping some sheen.
         clone.metalness = treatAsTrack ? 0.65 : Math.max(0.5, clone.metalness ?? 0.5);
         clone.roughness = treatAsTrack ? 0.28 : Math.min(0.35, clone.roughness ?? 0.35);
         clone.envMapIntensity = treatAsTrack ? 1.1 : 1.6;
@@ -225,10 +229,8 @@ function styleMeshForNeon(child) {
         } else {
             clone.emissiveIntensity = clone.emissiveIntensity ?? 0.35;
         }
-        clone.needsUpdate = true;
         return clone;
     });
-
     child.material = Array.isArray(child.material) ? styled : styled[0];
 }
 
@@ -257,11 +259,9 @@ function addCarHeadlights(model) {
 
         model.add(light);
 
-        // Visible marker so headlights are noticeable even if beam misses the camera.
         const marker = new THREE.Mesh(markerGeom, markerMat);
         marker.position.copy(light.position);
         marker.renderOrder = 10;
-        // Counter parent scale so marker stays visible even on tiny car models.
         marker.scale.set(
             model.scale.x === 0 ? 1 : 1 / model.scale.x,
             model.scale.y === 0 ? 1 : 1 / model.scale.y,
@@ -287,7 +287,6 @@ function addMeshToSector(mesh) {
         trackSectorMap.set(key, sector);
         trackSectors.push(sector);
     }
-
     sector.meshes.push(mesh);
     if (!sector.anchor) sector.anchor = mesh;
     mesh.frustumCulled = true;
@@ -306,14 +305,117 @@ function updateSectorVisibility(carPos) {
 }
 
 function forceAllSectorsVisible() {
-    trackSectors.forEach((sector) => {
-        sector.meshes.forEach((mesh) => {
-            mesh.visible = true;
-        });
-    });
+    trackSectors.forEach((sector) => sector.meshes.forEach(m => m.visible = true));
 }
 
-// --- CarControls Class ---
+// --- CLASS: Time Trial Manager (Updated with Visual Debuggers) ---
+class TimeTrialManager {
+    constructor(uiCurrent, uiBest, uiLap) {
+        this.uiCurrent = uiCurrent;
+        this.uiBest = uiBest;
+        this.uiLap = uiLap;
+        
+        this.lap = 1;
+        this.startTime = 0;
+        this.bestTime = Infinity;
+        this.isRunning = false;
+
+        // --- UPDATE THESE COORDINATES ---
+        this.checkpoints = [
+            // Checkpoint 1: Halfway point (Make sure this matches your map!)
+            { pos: new THREE.Vector3(315, 28, -121), radius: 15, passed: false }, 
+            
+            // Checkpoint 2: Another point (optional)
+            { pos: new THREE.Vector3(75, 50, 434), radius: 15, passed: false },
+
+            // FINISH LINE: radius reduced to 15 (was 40)
+            { pos: new THREE.Vector3(0, 18, 76), radius: 15, passed: false, isFinish: true } 
+        ];
+        
+        this.nextCheckpointIndex = 0;
+
+        // ✨ VISUAL DEBUGGER: This draws red spheres so you can SEE the checkpoints
+        this.debugMeshes = [];
+        this.checkpoints.forEach((cp, index) => {
+            const geometry = new THREE.SphereGeometry(cp.radius, 16, 16);
+            const material = new THREE.MeshBasicMaterial({ 
+                color: cp.isFinish ? 0x00ff00 : 0xff0000, // Green for finish, Red for others
+                wireframe: true,
+                transparent: true,
+                opacity: 0.3
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.copy(cp.pos);
+            scene.add(mesh);
+            this.debugMeshes.push(mesh);
+        });
+    }
+
+    start() {
+        this.isRunning = true;
+        this.startTime = clock.getElapsedTime();
+        this.lap = 1;
+        this.resetCheckpoints();
+    }
+
+    resetCheckpoints() {
+        this.checkpoints.forEach(cp => cp.passed = false);
+        this.nextCheckpointIndex = 0;
+        
+        // Reset debug colors
+        this.debugMeshes.forEach(m => m.material.color.setHex(0xff0000));
+        // Set finish line to green
+        this.debugMeshes[this.debugMeshes.length - 1].material.color.setHex(0x00ff00);
+    }
+
+    update(carPosition) {
+        if (!this.isRunning) return;
+
+        // 1. Update Timer UI
+        const currentTime = clock.getElapsedTime() - this.startTime;
+        this.uiCurrent.innerText = formatTime(currentTime);
+
+        // 2. Check collisions with the NEXT checkpoint only
+        const targetCP = this.checkpoints[this.nextCheckpointIndex];
+        const targetMesh = this.debugMeshes[this.nextCheckpointIndex];
+
+        // Highlight the next target in Yellow so you know where to drive
+        if(targetMesh) targetMesh.material.color.setHex(0xffff00);
+        
+        const dist = Math.sqrt(
+            Math.pow(carPosition.x - targetCP.pos.x, 2) + 
+            Math.pow(carPosition.z - targetCP.pos.z, 2)
+        );
+
+        if (dist < targetCP.radius) {
+            // eslint-disable-next-line no-console
+            console.log(`Checkpoint ${this.nextCheckpointIndex + 1} reached!`);
+            
+            if (targetCP.isFinish) {
+                this.completeLap(currentTime);
+            } else {
+                this.nextCheckpointIndex++;
+            }
+        }
+    }
+
+    completeLap(finalTime) {
+        if (finalTime < this.bestTime) {
+            this.bestTime = finalTime;
+            this.uiBest.innerText = formatTime(this.bestTime);
+            this.uiCurrent.style.color = '#00ff00';
+            setTimeout(() => this.uiCurrent.style.color = '#00ffcc', 1000);
+        }
+
+        this.lap++;
+        this.uiLap.innerText = this.lap;
+        this.startTime = clock.getElapsedTime();
+        this.resetCheckpoints();
+    }
+}
+const timeTrial = new TimeTrialManager(uiTimeCurrent, uiTimeBest, uiLapCount);
+
+// --- CarControls Class (Physics: Wall Collision REMOVED, Respawn Fixed) ---
 class CarControls {
     constructor(model, idleSoundRef, accelerationSoundRef) {
         this.model = model;
@@ -326,24 +428,24 @@ class CarControls {
         this.maxSteer = 0.04;
         
         this.velocity = new THREE.Vector3();
-        
-        // ✨ NEW: Vector to track the direction of MOMENTUM (separate from car rotation)
         this.moveDirection = new THREE.Vector3(0, 0, -1); 
         
-        // Raycasters
         this.groundRaycaster = new THREE.Raycaster();
         this.wallRaycaster = new THREE.Raycaster();
         
         this.gravity = 60; 
         this.isGrounded = false;
 
-        this.lastSafePosition = new THREE.Vector3(0, 30, 0);
+        this.lastSafePosition = new THREE.Vector3(0, 30, 90);
         this.lastSafeQuaternion = new THREE.Quaternion();
+        
+        // ✨ NEW: Timer to prevent saving unsafe positions at the edge
+        this.safePosTimer = 0;
+
         this.idleSound = idleSoundRef || null;
         this.accelerationSound = accelerationSoundRef || null;
         this.engineSoundThreshold = 1;
 
-        // ✨ NEW: Added 'space' to keys
         this.keys = { forward: false, backward: false, left: false, right: false, space: false };
         window.addEventListener('keydown', (e) => this.onKeyDown(e));
         window.addEventListener('keyup', (e) => this.onKeyUp(e));
@@ -358,12 +460,13 @@ class CarControls {
     manualReset() {
         this.speed = 0;
         this.velocity.set(0, 0, 0);
-        this.model.position.set(0, 20, 0); 
+        this.model.position.set(0, 30, 90); 
         this.model.rotation.set(0, 0, 0);
-        this.lastSafePosition.set(0, 20, 0);
-        // ✨ Reset movement vector on respawn
+        this.lastSafePosition.set(0, 30, 90);
         this.moveDirection.set(0, 0, -1);
         this.updateEngineAudio(true);
+        // Reset Time Trial too
+        timeTrial.start();
     }
 
     onKeyDown(event) {
@@ -372,7 +475,7 @@ class CarControls {
         case 'KeyS': case 'ArrowDown': this.keys.backward = true; break;
         case 'KeyA': case 'ArrowLeft': this.keys.left = true; break;
         case 'KeyD': case 'ArrowRight': this.keys.right = true; break;
-        case 'Space': this.keys.space = true; break; // ✨ Detect Space
+        case 'Space': this.keys.space = true; break; 
         }
     }
 
@@ -382,7 +485,7 @@ class CarControls {
         case 'KeyS': case 'ArrowDown': this.keys.backward = false; break;
         case 'KeyA': case 'ArrowLeft': this.keys.left = false; break;
         case 'KeyD': case 'ArrowRight': this.keys.right = false; break;
-        case 'Space': this.keys.space = false; break; // ✨ Detect Space
+        case 'Space': this.keys.space = false; break;
         }
     }
 
@@ -397,12 +500,7 @@ class CarControls {
         }
         this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed / 2, this.maxSpeed);
 
-        // ✨ NEW: Check Drift State
-        // You can only drift if moving forward fast enough
-        const isDrifting = this.keys.space && this.speed > 10;
-        
-        // 2. Steering
-        // While drifting, we allow sharper steering to emphasize the slide
+        const isDrifting = this.keys.space && Math.abs(this.speed) > 10;
         const steerMultiplier = isDrifting ? 1.5 : 1.0;
 
         if (this.keys.left) this.steering = this.maxSteer * steerMultiplier;
@@ -413,43 +511,15 @@ class CarControls {
             this.model.rotation.y += this.steering * (this.speed > 0 ? 1 : -1);
         }
 
-        // 3. Detect Wall Collisions
-        if (Math.abs(this.speed) > 0.1) {
-            // We check wall collisions based on where the MODEL is facing
-            const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.model.quaternion);
-            if (this.speed < 0) forwardDir.negate(); 
-
-            const rayOrigin = this.model.position.clone();
-            rayOrigin.y += 0.5; 
-            
-            this.wallRaycaster.set(rayOrigin, forwardDir);
-            const wallIntersects = this.wallRaycaster.intersectObjects(mapColliders);
-            
-            if (wallIntersects.length > 0 && wallIntersects[0].distance < 2) {
-                this.speed = 0;
-            }
-        }
-
-        // 4. Apply Movement Vector (THE DRIFT LOGIC)
-        // Get the direction the 3D model is currently facing
+        // --- 4. Apply Movement (Drift logic) ---
         const carFacingDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.model.quaternion);
-        
-        // "Grip" determines how strictly the car follows its rotation.
-        // High grip (0.8) = Car goes where it looks (Normal driving).
-        // Low grip (0.02) = Car slides on ice/drifts (Movement vector lags behind rotation).
         const gripFactor = isDrifting ? 0.1 : 0.8;
-
-        // Linearly interpolate the MOVEMENT direction towards the FACING direction
-        // This creates the "slide" effect.
         this.moveDirection.lerp(carFacingDir, gripFactor).normalize();
 
-        // If reversing, we usually want inverted control, but for simplicity
-        // we lock movement to facing direction when going slow/reverse to prevent bugs.
-        if (this.speed < 5) {
+        if (Math.abs(this.speed) < 5) {
             this.moveDirection.copy(carFacingDir);
         }
 
-        // Apply speed to the Calculated Drift Direction, NOT the model's rotation
         this.velocity.x = this.moveDirection.x * this.speed;
         this.velocity.z = this.moveDirection.z * this.speed;
         this.velocity.y -= this.gravity * deltaTime; 
@@ -469,17 +539,22 @@ class CarControls {
                 this.velocity.y = Math.max(0, this.velocity.y);
                 this.model.position.y = groundIntersects[0].point.y + 0.05;
                 
-                if (this.speed > 1) {
+                // ✨ FIX: Only save safe position if grounded for > 1 second
+                this.safePosTimer += deltaTime;
+                if (this.safePosTimer > 1.0 && Math.abs(this.speed) > 2) {
                     this.lastSafePosition.copy(this.model.position);
-                    this.lastSafePosition.y += 1.0; 
+                    this.lastSafePosition.y += 1.0; // Lift slightly to ensure raycast hits on respawn
                     this.lastSafeQuaternion.copy(this.model.quaternion);
+                    this.safePosTimer = 0;
                 }
 
             } else {
                 this.isGrounded = false;
+                this.safePosTimer = 0; // Reset timer if airborn
             }
         } else {
             this.isGrounded = false;
+            this.safePosTimer = 0;
         }
 
         // 6. Apply Velocity
@@ -488,12 +563,18 @@ class CarControls {
         // 7. Void Respawn
         if(this.model.position.y < -50) {
             // eslint-disable-next-line no-console
-            console.log("Fell into void! Respawning at safe spot...");
+            console.log("Fell into void! Respawning...");
+            
             this.model.position.copy(this.lastSafePosition);
-            this.model.quaternion.copy(this.lastSafeQuaternion); // Restore rotation too
-            this.moveDirection.set(0,0,-1).applyQuaternion(this.lastSafeQuaternion); // Restore vector
+            this.model.position.y += 2.0; // Drop from slightly higher
+            
+            this.model.quaternion.copy(this.lastSafeQuaternion); 
+            this.moveDirection.set(0,0,-1).applyQuaternion(this.lastSafeQuaternion); 
+            
+            // Kill all momentum
             this.speed = 0;
             this.velocity.set(0,0,0);
+            this.safePosTimer = 0;
         }
 
         // 8. UPDATE UI
@@ -527,25 +608,24 @@ export function levelOneBackground() {
     draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
     const trackLoader = new GLTFLoader();
     trackLoader.setDRACOLoader(draco);
+    // Ensure this path is correct relative to your HTML file!
     trackLoader.setPath('mario_kart_8_deluxe_-_wii_moonview_highway/');
 
-    // Use a dark backdrop; skip HDR environment to avoid white light influence.
     scene.background = new THREE.Color(0x05070f);
 
     trackLoader.load(
         'scene.gltf',
         (gltf) => {
             // eslint-disable-next-line no-console
-            console.log('Mario Kart map loaded');
+            console.log('Map loaded');
             const model = gltf.scene;
-            
             model.scale.set(0.1, 0.1, 0.1); 
             model.position.set(0, 0, 0); 
             scene.add(model);
 
             model.traverse((child) => {
                 if (child.isLight) {
-                    child.parent?.remove(child); // remove baked-in lights to avoid white illumination
+                    child.parent?.remove(child); 
                 } else if (child.isMesh) {
                     child.receiveShadow = true;
                     child.castShadow = true;
@@ -555,7 +635,6 @@ export function levelOneBackground() {
                 }
             });
 
-            // If we only have a single sector, disable culling to avoid hiding the whole map.
             if (trackSectors.length <= 1) {
                 sectorCullingEnabled = false;
                 forceAllSectorsVisible();
@@ -563,7 +642,7 @@ export function levelOneBackground() {
         },
         null,
         // eslint-disable-next-line no-console
-        (err) => console.error('Mario Kart GLTF load error:', err)
+        (err) => console.error('Map GLTF load error:', err)
     );
 }
 
@@ -577,9 +656,8 @@ loader.load(
         // eslint-disable-next-line no-console
         console.log("Car model loaded");
         const model = gltf.scene;
-        
         model.scale.set(0.01, 0.01, 0.01); 
-        model.position.set(0, 100, 0); 
+        model.position.set(0, 60, 90); 
         
         model.traverse(function (node) {
             if (node.isMesh) node.castShadow = true;
@@ -587,21 +665,24 @@ loader.load(
 
         carModel = model;
         scene.add(model);
+        
         addCarHeadlights(model);
 
         carController = new CarControls(carModel, idleSound, accelerationSound);
         tryAttachAudio();
+
+        // START THE CLOCK
+        timeTrial.start();
     },
     null,
     // eslint-disable-next-line no-console
     function (error) { console.error('Car load error:', error); }
 );
 
-// ✨ Hook up Reset Button
+// Reset Button
 btnReset.addEventListener('click', () => {
     if (carController) {
         carController.manualReset();
-        // Return focus to window so you can keep driving immediately
         window.focus(); 
     }
 });
@@ -615,6 +696,8 @@ function animate() {
 
     if (carController) {
         carController.update(deltaTime);
+        // UPDATE TIMER based on car position
+        timeTrial.update(carModel.position);
     }
 
     if (carModel) {
@@ -638,13 +721,15 @@ function animate() {
         camera.lookAt(lookAtTarget);
     }
 
-    renderer.render(scene, camera);
+    // Effect Composer rendering
+    composer.render();
 }
 
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
 }, false);
 
 levelOneBackground();
