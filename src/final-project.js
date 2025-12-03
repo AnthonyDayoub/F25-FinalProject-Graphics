@@ -85,11 +85,12 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const pmremGenerator = new THREE.PMREMGenerator(renderer);
 const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
-scene.environment = environmentTexture;
+// Keep environment null for colored neon-only lighting; we avoid neutral white reflections.
+scene.environment = null;
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloomPass = new UnrealBloomPass(new THREE.Vector3(1, 1, 1), 1.25, 0.4, 0.85);
+const bloomPass = new UnrealBloomPass(new THREE.Vector3(1, 1, 1), 1.6, 0.35, 0.9);
 composer.addPass(bloomPass);
 
 // --- Pointer / camera events ---
@@ -136,25 +137,143 @@ renderer.domElement.addEventListener('pointercancel', stopPointerDrag);
 renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
 // --- Lights ---
-const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8); 
-scene.add(hemiLight);
-const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
-keyLight.position.set(50, 100, 50);
-keyLight.castShadow = true;
-keyLight.shadow.mapSize.set(4096, 4096);
-keyLight.shadow.camera.left = -100;
-keyLight.shadow.camera.right = 100;
-keyLight.shadow.camera.top = 100;
-keyLight.shadow.camera.bottom = -100;
-scene.add(keyLight);
+// Futuristic wash: cyan/pink-only lighting (no neutral/white fill).
+function setupNeonLighting() {
+    const ambient = new THREE.AmbientLight(0x2a1036, 0.25); // pink-leaning ambient tint
+    scene.add(ambient);
+
+    const cyanDir = new THREE.DirectionalLight(0x5cf7ff, 0.9);
+    cyanDir.position.set(1, 1.2, 0.4);
+    cyanDir.castShadow = false;
+    scene.add(cyanDir);
+
+    const pinkDir = new THREE.DirectionalLight(0xff5cf1, 0.9);
+    pinkDir.position.set(-1, 1.1, -0.5);
+    pinkDir.castShadow = false;
+    scene.add(pinkDir);
+}
+setupNeonLighting();
+
+// City neon scatter: cyan/pink point lights across the play space for atmosphere.
+const cityNeonLights = [];
+function addCityNeonLights() {
+    const lightSets = [
+        { pos: new THREE.Vector3(80, 40, 0), color: 0x5cf7ff },
+        { pos: new THREE.Vector3(-80, 40, 0), color: 0xff5cf1 },
+        { pos: new THREE.Vector3(0, 35, 120), color: 0x5cf7ff },
+        { pos: new THREE.Vector3(0, 35, -120), color: 0xff5cf1 },
+        { pos: new THREE.Vector3(140, 30, 140), color: 0xff5cf1 },
+        { pos: new THREE.Vector3(-140, 30, -140), color: 0x5cf7ff },
+        { pos: new THREE.Vector3(140, 30, -140), color: 0x5cf7ff },
+        { pos: new THREE.Vector3(-140, 30, 140), color: 0xff5cf1 },
+        { pos: new THREE.Vector3(0, 50, 0), color: 0x84f0ff },
+        { pos: new THREE.Vector3(200, 25, 0), color: 0xff6adf },
+        { pos: new THREE.Vector3(-200, 25, 0), color: 0x6fe5ff },
+        { pos: new THREE.Vector3(0, 25, 200), color: 0xff6adf },
+        { pos: new THREE.Vector3(0, 25, -200), color: 0x6fe5ff },
+    ];
+
+    lightSets.forEach(({ pos, color }) => {
+        const l = new THREE.PointLight(color, 12, 280, 2);
+        l.position.copy(pos);
+        l.castShadow = false;
+        scene.add(l);
+        cityNeonLights.push(l);
+    });
+}
+addCityNeonLights();
 
 // --- Map sectoring (runtime chunking) ---
 const trackSectors = [];
 const trackSectorMap = new Map();
 const sectorWorkVec = new THREE.Vector3();
+const bboxHelper = new THREE.Box3();
+const sizeHelper = new THREE.Vector3();
 const trackSectorSize = 200; // world units per sector bucket
 let trackRenderDistance = 400; // distance from car to show a sector
 let sectorCullingEnabled = true;
+const carBoundsHelper = new THREE.Box3();
+const carSizeHelper = new THREE.Vector3();
+const carCenterHelper = new THREE.Vector3();
+
+function styleMeshForNeon(child) {
+    if (!child.material) return;
+
+    // Classify mesh by its bounds to roughly separate track from tall buildings.
+    bboxHelper.setFromObject(child);
+    bboxHelper.getSize(sizeHelper);
+    const isBuilding = sizeHelper.y > 15 && sizeHelper.y > sizeHelper.x * 0.7 && sizeHelper.y > sizeHelper.z * 0.7;
+    const isTrack = !isBuilding && sizeHelper.y < 12 && (sizeHelper.x > 6 || sizeHelper.z > 6);
+    const treatAsTrack = isTrack || !isBuilding; // default to shiny track style if unsure
+    const neonPalette = [0x00c8ff, 0xff3fb3];
+    const neonColor = neonPalette[child.id % neonPalette.length];
+
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    const styled = materials.map((mat) => {
+        const clone = mat.clone();
+        // Reduce mirror-like hotspots while keeping some sheen.
+        clone.metalness = treatAsTrack ? 0.65 : Math.max(0.5, clone.metalness ?? 0.5);
+        clone.roughness = treatAsTrack ? 0.28 : Math.min(0.35, clone.roughness ?? 0.35);
+        clone.envMapIntensity = treatAsTrack ? 1.1 : 1.6;
+
+        if (treatAsTrack) {
+            clone.emissive = new THREE.Color(0x0c1228);
+            clone.emissiveIntensity = 0.6;
+        } else if (isBuilding) {
+            clone.emissive = new THREE.Color(neonColor);
+            clone.emissiveIntensity = 1.8;
+        } else {
+            clone.emissiveIntensity = clone.emissiveIntensity ?? 0.35;
+        }
+        clone.needsUpdate = true;
+        return clone;
+    });
+
+    child.material = Array.isArray(child.material) ? styled : styled[0];
+}
+
+function addCarHeadlights(model) {
+    carBoundsHelper.setFromObject(model);
+    carBoundsHelper.getSize(carSizeHelper);
+    carBoundsHelper.getCenter(carCenterHelper);
+
+    // Assume forward -Z; use minZ as the front and place lights slightly in front and low.
+    const frontZ = carBoundsHelper.min.z - carSizeHelper.z * 0.05;
+    const xOffset = carSizeHelper.x * 0.25 || 0.2;
+    const yPos = carCenterHelper.y + carSizeHelper.y * 0.15;
+    const reach = Math.max(200, carSizeHelper.z * 20);
+    const markerGeom = new THREE.SphereGeometry(0.4, 12, 12);
+    const markerMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+
+    const makeLight = (xSign) => {
+        const light = new THREE.SpotLight(0xffffff, 250, reach, Math.PI / 3, 0.2, 1.2);
+        light.castShadow = false;
+        light.position.set(carCenterHelper.x + xSign * xOffset, yPos, frontZ);
+
+        const target = new THREE.Object3D();
+        target.position.set(carCenterHelper.x + xSign * xOffset * 0.6, yPos - carSizeHelper.y * 0.05, frontZ - carSizeHelper.z * 0.6);
+        model.add(target);
+        light.target = target;
+
+        model.add(light);
+
+        // Visible marker so headlights are noticeable even if beam misses the camera.
+        const marker = new THREE.Mesh(markerGeom, markerMat);
+        marker.position.copy(light.position);
+        marker.renderOrder = 10;
+        // Counter parent scale so marker stays visible even on tiny car models.
+        marker.scale.set(
+            model.scale.x === 0 ? 1 : 1 / model.scale.x,
+            model.scale.y === 0 ? 1 : 1 / model.scale.y,
+            model.scale.z === 0 ? 1 : 1 / model.scale.z
+        );
+        model.add(marker);
+        return light;
+    };
+
+    makeLight(1);
+    makeLight(-1);
+}
 
 function addMeshToSector(mesh) {
     const pos = mesh.position;
@@ -410,12 +529,8 @@ export function levelOneBackground() {
     trackLoader.setDRACOLoader(draco);
     trackLoader.setPath('mario_kart_8_deluxe_-_wii_moonview_highway/');
 
-    const rgbe = new RGBELoader();
-    rgbe.load('/textures/sky.hdr', (hdr) => {
-        hdr.mapping = THREE.EquirectangularReflectionMapping;
-        scene.environment = hdr;
-        scene.background = hdr;
-    });
+    // Use a dark backdrop; skip HDR environment to avoid white light influence.
+    scene.background = new THREE.Color(0x05070f);
 
     trackLoader.load(
         'scene.gltf',
@@ -429,9 +544,12 @@ export function levelOneBackground() {
             scene.add(model);
 
             model.traverse((child) => {
-                if (child.isMesh) {
+                if (child.isLight) {
+                    child.parent?.remove(child); // remove baked-in lights to avoid white illumination
+                } else if (child.isMesh) {
                     child.receiveShadow = true;
                     child.castShadow = true;
+                    styleMeshForNeon(child);
                     mapColliders.push(child);
                     addMeshToSector(child);
                 }
@@ -469,6 +587,7 @@ loader.load(
 
         carModel = model;
         scene.add(model);
+        addCarHeadlights(model);
 
         carController = new CarControls(carModel, idleSound, accelerationSound);
         tryAttachAudio();
