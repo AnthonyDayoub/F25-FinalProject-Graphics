@@ -66,7 +66,7 @@ audioLoader.load('acceleration.mp3', (buffer) => {
 });
 
 // Camera follow helpers
-const chaseLerpFactor = 1.2;
+const chaseLerpFactor = 1.12;
 const carWorldPosition = new THREE.Vector3();
 const carWorldQuaternion = new THREE.Quaternion();
 let carModel = null;
@@ -236,7 +236,6 @@ function addCarHeadlights(model) {
     carBoundsHelper.getSize(carSizeHelper);
     carBoundsHelper.getCenter(carCenterHelper);
 
-    // Assume forward -Z; use minZ as the front and place lights slightly in front and low.
     const frontZ = carBoundsHelper.min.z - carSizeHelper.z * 0.05;
     const xOffset = carSizeHelper.x * 0.25 || 0.2;
     const yPos = carCenterHelper.y + carSizeHelper.y * 0.15;
@@ -305,7 +304,25 @@ function forceAllSectorsVisible() {
     trackSectors.forEach((sector) => sector.meshes.forEach(m => m.visible = true));
 }
 
-// --- CLASS: Time Trial Manager (Updated with Visual Debuggers) ---
+// --- Safety Net (Fix for falling through map) ---
+function addSafetyNet() {
+    const geometry = new THREE.BoxGeometry(5000, 1, 5000);
+    const material = new THREE.MeshBasicMaterial({ color: 0x0000ff, visible: false });
+    const safetyFloor = new THREE.Mesh(geometry, material);
+    
+    // Position below the lowest road
+    safetyFloor.position.set(0, -5, 0); 
+    
+    // IMPORTANT: Name it so we can detect it later
+    safetyFloor.name = 'SafetyNet'; 
+    
+    scene.add(safetyFloor);
+    mapColliders.push(safetyFloor);
+}
+addSafetyNet();
+
+
+// --- CLASS: Time Trial Manager (Doorframe Logic) ---
 class TimeTrialManager {
     constructor(uiCurrent, uiBest, uiLap) {
         this.uiCurrent = uiCurrent;
@@ -317,32 +334,40 @@ class TimeTrialManager {
         this.bestTime = Infinity;
         this.isRunning = false;
 
-        // --- UPDATE THESE COORDINATES ---
+        // --- CHECKPOINT CONFIGURATION ---
         this.checkpoints = [
-            // Checkpoint 1: Halfway point (Make sure this matches your map!)
-            { pos: new THREE.Vector3(315, 28, -121), radius: 15, passed: false }, 
+            // Checkpoint 1
+            { pos: new THREE.Vector3(315, 28, -121), rot: 0, radius: 20, passed: false }, 
             
-            // Checkpoint 2: Another point (optional)
-            { pos: new THREE.Vector3(75, 50, 434), radius: 15, passed: false },
+            // Checkpoint 2
+            { pos: new THREE.Vector3(75, 50, 434), rot: 1.5, radius: 35, passed: false },
 
-            // FINISH LINE: radius reduced to 15 (was 40)
-            { pos: new THREE.Vector3(0, 18, 76), radius: 15, passed: false, isFinish: true } 
+            // FINISH LINE
+            { pos: new THREE.Vector3(0, 18, 74), rot: 0, radius: 15, passed: false, isFinish: true } 
         ];
         
         this.nextCheckpointIndex = 0;
-
-        // ✨ VISUAL DEBUGGER: This draws red spheres so you can SEE the checkpoints
         this.debugMeshes = [];
+
+        // --- CREATE WALL VISUALS ---
         this.checkpoints.forEach((cp) => {
-            const geometry = new THREE.SphereGeometry(cp.radius, 16, 16);
+            // Visual Width is Radius * 3
+            const geometry = new THREE.BoxGeometry(cp.radius * 3.0, 25, 1);
+            
             const material = new THREE.MeshBasicMaterial({ 
-                color: cp.isFinish ? 0x00ff00 : 0xff0000, // Green for finish, Red for others
-                wireframe: true,
+                color: cp.isFinish ? 0x00ff00 : 0x00ffff, 
                 transparent: true,
-                opacity: 0.3
+                opacity: 0.25,      
+                side: THREE.DoubleSide,
+                depthWrite: false,  
+                blending: THREE.AdditiveBlending 
             });
+            
             const mesh = new THREE.Mesh(geometry, material);
             mesh.position.copy(cp.pos);
+            mesh.position.y += 10; 
+            mesh.rotation.y = cp.rot; 
+            
             scene.add(mesh);
             this.debugMeshes.push(mesh);
         });
@@ -354,40 +379,72 @@ class TimeTrialManager {
         this.lap = 1;
         this.resetCheckpoints();
     }
+    
+    // Helper to completely reset the game state
+    fullReset() {
+        this.lap = 1;
+        this.bestTime = Infinity;
+        this.startTime = clock.getElapsedTime();
+        this.uiBest.innerText = "--:--.--";
+        this.uiLap.innerText = this.lap;
+        this.uiCurrent.style.color = '#00ffcc';
+        this.resetCheckpoints();
+    }
 
     resetCheckpoints() {
         this.checkpoints.forEach(cp => cp.passed = false);
         this.nextCheckpointIndex = 0;
         
-        // Reset debug colors
-        this.debugMeshes.forEach(m => m.material.color.setHex(0xff0000));
-        // Set finish line to green
-        this.debugMeshes[this.debugMeshes.length - 1].material.color.setHex(0x00ff00);
+        this.debugMeshes.forEach((m, idx) => {
+            const isFin = this.checkpoints[idx].isFinish;
+            m.material.color.setHex(isFin ? 0x00ff00 : 0x00ffff);
+            m.material.opacity = 0.25;
+        });
     }
 
     update(carPosition) {
         if (!this.isRunning) return;
 
-        // 1. Update Timer UI
         const currentTime = clock.getElapsedTime() - this.startTime;
         this.uiCurrent.innerText = formatTime(currentTime);
 
-        // 2. Check collisions with the NEXT checkpoint only
         const targetCP = this.checkpoints[this.nextCheckpointIndex];
         const targetMesh = this.debugMeshes[this.nextCheckpointIndex];
 
-        // Highlight the next target in Yellow so you know where to drive
-        if(targetMesh) targetMesh.material.color.setHex(0xffff00);
-        
-        const dist = Math.sqrt(
-            Math.pow(carPosition.x - targetCP.pos.x, 2) + 
-            Math.pow(carPosition.z - targetCP.pos.z, 2)
-        );
+        if(targetMesh) {
+            targetMesh.material.color.setHex(0xffff00);
+            targetMesh.material.opacity = 0.5;
+        }
 
-        if (dist < targetCP.radius) {
-            // eslint-disable-next-line no-console
-            console.log(`Checkpoint ${this.nextCheckpointIndex + 1} reached!`);
+        // --- NEW DETECTION LOGIC: "The Doorframe" ---
+        
+        // 1. Calculate vector from Checkpoint -> Car
+        const carLocal = carPosition.clone().sub(targetCP.pos);
+        
+        // 2. Rotate this vector to match the gate's rotation
+        // This gives us:
+        // x = Distance left/right from center of gate
+        // z = Distance forward/back from face of gate
+        const rotation = new THREE.Quaternion();
+        rotation.setFromAxisAngle(new THREE.Vector3(0,1,0), -targetCP.rot); 
+        carLocal.applyQuaternion(rotation);
+
+        // 3. Define the Trigger Zone
+        // Width: Must be within the visual box (radius * 3 / 2)
+        const gateHalfWidth = (targetCP.radius * 3.0) / 2.0; 
+        
+        // Depth: Must be within 6 units of the wall face (Front or Back)
+        // Note: 6.0 is thick enough to catch high speed cars, thin enough to not trigger early
+        const gateThickness = 6.0; 
+
+        // 4. Check if inside the box
+        if (Math.abs(carLocal.x) < gateHalfWidth && Math.abs(carLocal.z) < gateThickness) {
+            console.log(`Checkpoint ${this.nextCheckpointIndex + 1} passed!`);
             
+            // Visual feedback
+            targetMesh.material.color.setHex(0x333333);
+            targetMesh.material.opacity = 0.1;
+
             if (targetCP.isFinish) {
                 this.completeLap(currentTime);
             } else {
@@ -411,39 +468,56 @@ class TimeTrialManager {
     }
 }
 const timeTrial = new TimeTrialManager(uiTimeCurrent, uiTimeBest, uiLapCount);
-
-// --- CarControls Class (Physics: Wall Collision REMOVED, Respawn Fixed) ---
 class CarControls {
     constructor(model, idleSoundRef, accelerationSoundRef) {
         this.model = model;
-        this.speed = 0;
-        this.maxSpeed = 100; 
-        this.acceleration = 30;
-        this.brakeStrength = 40;
-        this.drag = 0.5;
-        this.steering = 0;
-        this.maxSteer = 0.04;
         
+        // --- 1. DEFAULT STATS ---
+        this.maxSpeed = 120; 
+        this.acceleration = 45;
+        this.brakeStrength = 50;
+        this.maxSteer = 0.04;
+        this.gravity = 80;
+        this.drag = 0.5;
+
+        // --- 2. STATES ---
+        this.speed = 0;
         this.velocity = new THREE.Vector3();
-        this.moveDirection = new THREE.Vector3(0, 0, -1); 
+        this.moveDirection = new THREE.Vector3(0, 0, -1);
+        this.isGrounded = false;
+        
+        // --- 3. PHYSICS SETUP ---
+        this.rideHeight = 0.5; 
+        this.tiltSpeed = 0.08; 
+        this.badObjects = ["Object_63", "Object_78", "SafetyNet", "Object_54"];
         
         this.groundRaycaster = new THREE.Raycaster();
-        this.wallRaycaster = new THREE.Raycaster();
-        
-        this.gravity = 60; 
-        this.isGrounded = false;
+        this.upRaycaster = new THREE.Raycaster();
 
-        this.lastSafePosition = new THREE.Vector3(0, 30, 90);
+        // --- 4. RESTORED ORIGINAL SPAWN ---
+        this.lastSafePosition = new THREE.Vector3(0, 30, 90); 
         this.lastSafeQuaternion = new THREE.Quaternion();
         
-        // ✨ NEW: Timer to prevent saving unsafe positions at the edge
         this.safePosTimer = 0;
+        this.groundMemory = 0; 
+        this.memoryDuration = 0.25;
+        this.lastValidGroundY = -Infinity;
 
+        // Audio
         this.idleSound = idleSoundRef || null;
         this.accelerationSound = accelerationSoundRef || null;
         this.engineSoundThreshold = 1;
 
+        // Input
         this.keys = { forward: false, backward: false, left: false, right: false, space: false };
+        this.canDrive = true; // Input Locked, but Physics will run
+
+        // Debug
+        this.debugMode = false;
+        this.rayHelper = new THREE.ArrowHelper(new THREE.Vector3(0,-1,0), this.model.position, 10, 0xffff00);
+        this.rayHelper.visible = false;
+        scene.add(this.rayHelper);
+
         window.addEventListener('keydown', (e) => this.onKeyDown(e));
         window.addEventListener('keyup', (e) => this.onKeyUp(e));
     }
@@ -454,19 +528,53 @@ class CarControls {
         this.updateEngineAudio(true);
     }
 
+    // --- MENU HANDLER ---
+    startGame(settings) {
+        console.log("Stats Applied:", settings);
+        this.maxSpeed = settings.speed;
+        this.acceleration = settings.accel;
+        this.maxSteer = settings.steer;
+        
+        this.canDrive = true; // Unlock Input
+        // Note: We DO NOT reset position here anymore. 
+        // The car has likely already dropped to the road by now.
+    }
+
     manualReset() {
         this.speed = 0;
         this.velocity.set(0, 0, 0);
+        
+        // Restore spawn
         this.model.position.set(0, 30, 90); 
         this.model.rotation.set(0, 0, 0);
         this.lastSafePosition.set(0, 30, 90);
+        
         this.moveDirection.set(0, 0, -1);
+        this.groundMemory = 0;
         this.updateEngineAudio(true);
-        // Reset Time Trial too
-        timeTrial.start();
+    }
+
+    hardRespawn() {
+        console.log("Void Respawn");
+        this.model.position.copy(this.lastSafePosition);
+        this.model.position.y += 2.0; 
+        const safeEuler = new THREE.Euler().setFromQuaternion(this.lastSafeQuaternion, 'YXZ');
+        this.model.rotation.set(0, safeEuler.y, 0);
+        this.moveDirection.set(0, 0, -1).applyEuler(this.model.rotation);
+        this.speed = 0;
+        this.velocity.set(0,0,0);
+        this.safePosTimer = 0;
+        this.groundMemory = 0;
     }
 
     onKeyDown(event) {
+        // We only block driving keys, not debug keys
+        if (!this.canDrive && ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(event.code)) return;
+
+        if (event.key.toLowerCase() === 'v') {
+            this.debugMode = !this.debugMode;
+            this.rayHelper.visible = this.debugMode;
+        }
         switch (event.code) {
         case 'KeyW': case 'ArrowUp': this.keys.forward = true; break;
         case 'KeyS': case 'ArrowDown': this.keys.backward = true; break;
@@ -487,108 +595,143 @@ class CarControls {
     }
 
     update(deltaTime) {
-        // 1. Calculate Input Speed
-        if (this.keys.forward) {
-            this.speed += this.acceleration * deltaTime;
-        } else if (this.keys.backward) {
-            this.speed -= this.brakeStrength * deltaTime;
+        // --- 1. INPUT LOGIC (Only runs if unlocked) ---
+        if (this.canDrive) {
+            if (this.keys.forward) this.speed += this.acceleration * deltaTime;
+            else if (this.keys.backward) this.speed -= this.brakeStrength * deltaTime;
+            else this.speed *= (1 - this.drag * deltaTime);
+            
+            // Steering
+            const isDrifting = this.keys.space && Math.abs(this.speed) > 10;
+            if (this.keys.left) this.steering = this.maxSteer * (isDrifting ? 1.5 : 1.0);
+            else if (this.keys.right) this.steering = -this.maxSteer * (isDrifting ? 1.5 : 1.0);
+            else this.steering = 0;
         } else {
+            // If locked, just slow down naturally
             this.speed *= (1 - this.drag * deltaTime);
+            this.steering = 0;
         }
+
+        // Clamp Speed
         this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed / 2, this.maxSpeed);
 
-        const isDrifting = this.keys.space && Math.abs(this.speed) > 10;
-        const steerMultiplier = isDrifting ? 1.5 : 1.0;
+        // Apply Rotation
+        if (Math.abs(this.speed) > 0.1) this.model.rotateY(this.steering * (this.speed > 0 ? 1 : -1));
 
-        if (this.keys.left) this.steering = this.maxSteer * steerMultiplier;
-        else if (this.keys.right) this.steering = -this.maxSteer * steerMultiplier;
-        else this.steering = 0;
-
-        if (Math.abs(this.speed) > 0.1) {
-            this.model.rotation.y += this.steering * (this.speed > 0 ? 1 : -1);
-        }
-
-        // --- 4. Apply Movement (Drift logic) ---
+        // Calculate Velocity Vector
         const carFacingDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.model.quaternion);
-        const gripFactor = isDrifting ? 0.1 : 0.8;
-        this.moveDirection.lerp(carFacingDir, gripFactor).normalize();
-
-        if (Math.abs(this.speed) < 5) {
-            this.moveDirection.copy(carFacingDir);
-        }
+        // Drift Factor
+        const grip = (this.keys.space && Math.abs(this.speed) > 10) ? 0.05 : 0.8; 
+        this.moveDirection.lerp(carFacingDir, grip).normalize();
+        if (Math.abs(this.speed) < 5) this.moveDirection.copy(carFacingDir);
 
         this.velocity.x = this.moveDirection.x * this.speed;
         this.velocity.z = this.moveDirection.z * this.speed;
         this.velocity.y -= this.gravity * deltaTime; 
 
-        // 5. Ground Collision
-        const groundRayOrigin = this.model.position.clone();
-        groundRayOrigin.y += 2.0; 
+        // --- 2. PHYSICS (ALWAYS RUNS) ---
+        // This ensures the car drops to the floor even if the menu is open
         
-        this.groundRaycaster.set(groundRayOrigin, new THREE.Vector3(0, -1, 0));
-        const groundIntersects = this.groundRaycaster.intersectObjects(mapColliders);
+        let rayOrigin = this.model.position.clone();
+        rayOrigin.y += 5.0; 
+        this.groundRaycaster.set(rayOrigin, new THREE.Vector3(0, -1, 0));
+        this.groundRaycaster.far = 15.0; 
+        let hits = this.groundRaycaster.intersectObjects(mapColliders);
 
-        if (groundIntersects.length > 0) {
-            const dist = groundIntersects[0].distance;
-            
-            if (dist < 2.5) {
-                this.isGrounded = true;
-                this.velocity.y = Math.max(0, this.velocity.y);
-                this.model.position.y = groundIntersects[0].point.y + 0.05;
-                
-                // ✨ FIX: Only save safe position if grounded for > 1 second
-                this.safePosTimer += deltaTime;
-                if (this.safePosTimer > 1.0 && Math.abs(this.speed) > 2) {
-                    this.lastSafePosition.copy(this.model.position);
-                    this.lastSafePosition.y += 1.0; // Lift slightly to ensure raycast hits on respawn
-                    this.lastSafeQuaternion.copy(this.model.quaternion);
-                    this.safePosTimer = 0;
+        let isRayHittingSomething = false;
+        let groundHit = null;
+
+        if (hits.length > 0) groundHit = hits[0];
+
+        // Submarine Check
+        if (!groundHit) {
+            this.upRaycaster.set(this.model.position, new THREE.Vector3(0, 1, 0));
+            this.upRaycaster.far = 5.0; 
+            const upHits = this.upRaycaster.intersectObjects(mapColliders);
+            if (upHits.length > 0) {
+                const roof = upHits[0];
+                if (!this.badObjects.includes(roof.object.name)) groundHit = roof; 
+            }
+        }
+
+        if (groundHit) {
+            const name = groundHit.object.name;
+            const isBadObject = this.badObjects.includes(name) || name.includes("SafetyNet");
+
+            if (!isBadObject) {
+                let groundNormal = groundHit.face.normal.clone().applyQuaternion(groundHit.object.quaternion);
+                const up = new THREE.Vector3(0, 1, 0);
+                const angle = groundNormal.angleTo(up); 
+
+                if (angle < 1.0 || groundHit.distance < 0) { 
+                    const targetY = groundHit.point.y + this.rideHeight;
+                    const distToTarget = Math.abs(targetY - this.model.position.y);
+                    
+                    if (distToTarget < 15.0) {
+                        isRayHittingSomething = true;
+                        this.isGrounded = true;
+                        this.groundMemory = this.memoryDuration;
+                        this.lastValidGroundY = groundHit.point.y; 
+                        
+                        this.velocity.y = Math.max(0, this.velocity.y);
+                        this.model.position.y = THREE.MathUtils.lerp(this.model.position.y, targetY, 0.5);
+
+                        if (angle < 1.0) {
+                            const currentLook = new THREE.Vector3(0, 0, -1).applyQuaternion(this.model.quaternion);
+                            const project = currentLook.clone().sub(groundNormal.clone().multiplyScalar(currentLook.dot(groundNormal))).normalize();
+                            const targetRot = new THREE.Matrix4().lookAt(new THREE.Vector3(), project, groundNormal);
+                            const targetQuat = new THREE.Quaternion().setFromRotationMatrix(targetRot);
+                            this.model.quaternion.slerp(targetQuat, this.tiltSpeed);
+                        }
+
+                        // Only save safe position if moving fast enough
+                        this.safePosTimer += deltaTime;
+                        if (this.safePosTimer > 1.0 && Math.abs(this.speed) > 5) {
+                            this.lastSafePosition.copy(this.model.position);
+                            this.lastSafePosition.y += 1.0; 
+                            this.lastSafeQuaternion.copy(this.model.quaternion);
+                            this.safePosTimer = 0;
+                        }
+                    }
                 }
+            }
+        }
 
+        if (!isRayHittingSomething) {
+            this.groundMemory -= deltaTime;
+            if (this.groundMemory > 0) {
+                const targetY = this.lastValidGroundY + this.rideHeight;
+                this.model.position.y = THREE.MathUtils.lerp(this.model.position.y, targetY, 0.5);
+                this.velocity.y = 0;
+                this.isGrounded = true; 
             } else {
                 this.isGrounded = false;
-                this.safePosTimer = 0; // Reset timer if airborn
+                this.safePosTimer = 0;
             }
-        } else {
-            this.isGrounded = false;
-            this.safePosTimer = 0;
         }
 
-        // 6. Apply Velocity
+        if (this.debugMode) {
+            this.rayHelper.position.copy(rayOrigin);
+            this.rayHelper.setColor(new THREE.Color(isRayHittingSomething ? 0x00ff00 : 0xff0000));
+        }
+
         this.model.position.addScaledVector(this.velocity, deltaTime);
+        if(this.model.position.y < -50) this.hardRespawn();
+
+        // UI
+        if (uiSpeed) uiSpeed.innerText = Math.abs(this.speed).toFixed(1);
+        if (uiPosX) uiPosX.innerText = this.model.position.x.toFixed(1);
+        if (uiPosY) uiPosY.innerText = this.model.position.y.toFixed(1);
+        if (uiPosZ) uiPosZ.innerText = this.model.position.z.toFixed(1);
         
-        // 7. Void Respawn
-        if(this.model.position.y < -50) {
-            // eslint-disable-next-line no-console
-            console.log("Fell into void! Respawning...");
-            
-            this.model.position.copy(this.lastSafePosition);
-            this.model.position.y += 2.0; // Drop from slightly higher
-            
-            this.model.quaternion.copy(this.lastSafeQuaternion); 
-            this.moveDirection.set(0,0,-1).applyQuaternion(this.lastSafeQuaternion); 
-            
-            // Kill all momentum
-            this.speed = 0;
-            this.velocity.set(0,0,0);
-            this.safePosTimer = 0;
-        }
-
-        // 8. UPDATE UI
-        uiSpeed.innerText = Math.abs(this.speed).toFixed(1);
-        uiPosX.innerText = this.model.position.x.toFixed(1);
-        uiPosY.innerText = this.model.position.y.toFixed(1);
-        uiPosZ.innerText = this.model.position.z.toFixed(1);
-
         this.updateEngineAudio();
     }
 
+    
     updateEngineAudio(forceIdle = false) {
         if (!this.idleSound || !this.accelerationSound) return;
         if (!this.idleSound.buffer || !this.accelerationSound.buffer) return;
-
         const moving = Math.abs(this.speed) > this.engineSoundThreshold;
-
         if (forceIdle || !moving) {
             if (this.accelerationSound.isPlaying) this.accelerationSound.stop();
             if (!this.idleSound.isPlaying) this.idleSound.play();
@@ -598,14 +741,12 @@ class CarControls {
         }
     }
 }
-
 // --- Loaders ---
 export function levelOneBackground() {
     const draco = new DRACOLoader();
     draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
     const trackLoader = new GLTFLoader();
     trackLoader.setDRACOLoader(draco);
-    // Ensure this path is correct relative to your HTML file!
     trackLoader.setPath('mario_kart_8_deluxe_-_wii_moonview_highway/');
 
     scene.background = new THREE.Color(0x05070f);
@@ -613,10 +754,8 @@ export function levelOneBackground() {
     trackLoader.load(
         'scene.gltf',
         (gltf) => {
-            // eslint-disable-next-line no-console
-            console.log('Map loaded');
+            console.log('Map loaded - Filtering Invisible Walls');
             const model = gltf.scene;
-            model.scale.set(0.1, 0.1, 0.1); 
             model.position.set(0, 0, 0); 
             scene.add(model);
 
@@ -624,10 +763,35 @@ export function levelOneBackground() {
                 if (child.isLight) {
                     child.parent?.remove(child); 
                 } else if (child.isMesh) {
+                    child.geometry.scale(0.1, 0.1, 0.1);
+                    child.material.side = THREE.DoubleSide;
+                    
                     child.receiveShadow = true;
                     child.castShadow = true;
                     styleMeshForNeon(child);
-                    mapColliders.push(child);
+
+                    // --- FILTERING LOGIC ---
+                    bboxHelper.setFromObject(child);
+                    bboxHelper.getSize(sizeHelper);
+
+                    // Filter 1: Ignore extremely tall boxes that aren't wide (Likely buildings/signs)
+                    // If height > 20 AND height > width * 2, it's a pole or building.
+                    const isTallBuilding = sizeHelper.y > 20 && sizeHelper.y > Math.max(sizeHelper.x, sizeHelper.z) * 1.5;
+                    
+                    // Filter 2: Ignore specific "Object_63" type names if they are problematic
+                    // (You can add specific names here if you find them with the clicker)
+                    const isBadObject = child.name.includes("Object_X"); 
+
+                    if (!isTallBuilding && !isBadObject) {
+                        mapColliders.push(child);
+                    }
+             
+                    else {
+                         // Optional: Visualize what we removed (Red wireframe)
+                         // const removed = new THREE.BoxHelper(child, 0xff0000);
+                         // scene.add(removed);
+                    }
+
                     addMeshToSector(child);
                 }
             });
@@ -638,11 +802,10 @@ export function levelOneBackground() {
             }
         },
         null,
-        // eslint-disable-next-line no-console
         (err) => console.error('Map GLTF load error:', err)
     );
 }
-
+// Load Car
 // Load Car
 const loader = new GLTFLoader();
 loader.setPath('cyberpunk_car/');
@@ -650,32 +813,32 @@ loader.setPath('cyberpunk_car/');
 loader.load(
     'scene.gltf',
     function (gltf) {
-        // eslint-disable-next-line no-console
         console.log("Car model loaded");
         const model = gltf.scene;
         model.scale.set(0.01, 0.01, 0.01); 
-        model.position.set(0, 60, 90); 
+        model.position.set(0, 30, 90); 
         
         model.traverse(function (node) {
             if (node.isMesh) node.castShadow = true;
         });
 
         carModel = model;
-        scene.add(model);
+        scene.add(model); // Add car to scene
+        
+        // IMPORTANT: DO NOT ADD CAMERA TO MODEL HERE. 
+        // We leave the camera separate so animate() can move it smoothly.
         
         addCarHeadlights(model);
 
         carController = new CarControls(carModel, idleSound, accelerationSound);
         tryAttachAudio();
 
-        // START THE CLOCK
+        // Start Clock immediately (No Menu blocking)
         timeTrial.start();
     },
     null,
-    // eslint-disable-next-line no-console
     function (error) { console.error('Car load error:', error); }
 );
-
 // Reset Button
 btnReset.addEventListener('click', () => {
     if (carController) {
@@ -684,44 +847,77 @@ btnReset.addEventListener('click', () => {
     }
 });
 
+// --- NEW RESTART BUTTON LOGIC ---
+const btnRestart = document.getElementById('restart-btn');
 
+if (btnRestart) {
+    btnRestart.addEventListener('click', () => {
+        // 1. Reset all times and laps
+        timeTrial.fullReset();
+        
+        // 2. Reset Car Position (Move to start line)
+        if (carController) {
+            carController.manualReset();
+        }
+        
+        // 3. Refocus window so you can drive immediately
+        window.focus();
+    });
+}
+
+// Coordinate Logger Tool (Press P to log position)
+window.addEventListener('keydown', (event) => {
+    if (event.key === 'p' || event.key === 'P') {
+        if (!carModel) return;
+        const p = carModel.position;
+        console.log(`{ pos: new THREE.Vector3(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}), radius: 15, passed: false },`);
+    }
+});
+
+
+// --- Render Loop ---
 // --- Render Loop ---
 function animate() {
     requestAnimationFrame(animate);
 
     const deltaTime = clock.getDelta();
 
+    // 1. PHYSICS (Move the Car Object)
     if (carController) {
         carController.update(deltaTime);
-        // UPDATE TIMER based on car position
-        timeTrial.update(carModel.position);
+        
+        // Update Time Trial Logic
+        if (typeof timeTrial !== 'undefined') {
+            timeTrial.update(carModel.position);
+        }
     }
 
+    // 2. CAMERA (Follow the Car Object)
     if (carModel) {
+        // Get the new position after physics moved it
         carModel.getWorldPosition(carWorldPosition);
         carModel.getWorldQuaternion(carWorldQuaternion);
 
+        // Optimization: Show/Hide map chunks
         updateSectorVisibility(carWorldPosition);
 
-        followSpherical.radius = THREE.MathUtils.clamp(
-            followSpherical.radius,
-            minCameraDistance,
-            maxCameraDistance
-        );
+        // Calculate Camera Target Position
+        followSpherical.radius = THREE.MathUtils.clamp(followSpherical.radius, minCameraDistance, maxCameraDistance);
         relativeCameraOffset.setFromSpherical(followSpherical);
         relativeCameraOffset.applyQuaternion(carWorldQuaternion); 
-
         desiredCameraPosition.copy(carWorldPosition).add(relativeCameraOffset);
+        
+        // Smoothly Move Camera (The "Lag" effect)
         camera.position.lerp(desiredCameraPosition, chaseLerpFactor);
 
+        // Look at the Car
         lookAtTarget.copy(carWorldPosition).add(lookAtOffset);
         camera.lookAt(lookAtTarget);
     }
 
-    // Effect Composer rendering
+    // 3. RENDER
     composer.render();
 }
-
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -731,3 +927,75 @@ window.addEventListener('resize', () => {
 
 levelOneBackground();
 animate();
+
+// --- DEBUG TOOL: Collision Vision ---
+// Press 'C' to toggle collision highlights
+let debugGroup = null;
+
+function toggleCollisionDebug() {
+    // 1. If debug is currently ON, turn it OFF
+    if (debugGroup) {
+        scene.remove(debugGroup);
+        debugGroup = null;
+        
+        // Hide the Safety Net again
+        const net = mapColliders.find(obj => obj.name === 'SafetyNet');
+        if (net) {
+            net.visible = false;
+            // Restore original material properties if needed
+            net.material.wireframe = false;
+        }
+        
+        console.log("Collision Debug: OFF");
+        return;
+    }
+
+    // 2. If debug is OFF, turn it ON
+    console.log("Collision Debug: ON (Magenta = Road, Red = SafetyNet)");
+    debugGroup = new THREE.Group();
+    
+    scene.add(debugGroup);
+
+    // Create a shared material for the overlay
+    const wireframeMat = new THREE.MeshBasicMaterial({
+        color: 0xff00ff, // Hot Pink/Magenta
+        wireframe: true,
+        transparent: true,
+        opacity: 0.3,
+        depthTest: false // Draw ON TOP of everything (X-ray view)
+    });
+
+    mapColliders.forEach(obj => {
+        // Special Case: The Safety Net
+        if (obj.name === 'SafetyNet') {
+            obj.visible = true;
+            obj.material.color.setHex(0xff0000); // Red
+            obj.material.wireframe = true;
+            obj.material.transparent = true;
+            obj.material.opacity = 0.5;
+            return; // Don't add a clone, just show the real mesh
+        }
+
+        // Standard Case: Roads & Buildings
+        // We create a clone mesh so we don't ruin the original textures
+        if (obj.geometry) {
+            const clone = new THREE.Mesh(obj.geometry, wireframeMat);
+            
+            // Copy transform exactly
+            clone.position.copy(obj.position);
+            clone.rotation.copy(obj.rotation);
+            clone.scale.copy(obj.scale);
+            
+            // Add to the debug group
+            debugGroup.add(clone);
+        }
+    });
+}
+
+// Bind to Key 'C'
+window.addEventListener('keydown', (event) => {
+    if (event.key.toLowerCase() === 'c') {
+        toggleCollisionDebug();
+    }
+});
+

@@ -7,13 +7,13 @@
         body { margin: 0; overflow: hidden; background-color: #000; }
         canvas { display: block; }
         
-        /* ✨ UI Styles */
+        /* 🏎️ IN-GAME HUD */
         #ui-container {
             position: absolute;
             top: 20px;
             left: 20px;
-            background: rgba(0, 5, 16, 0.85); /* Darker, clearer background */
-            color: #00ffcc; /* Cyberpunk green text */
+            background: rgba(0, 5, 16, 0.85);
+            color: #00ffcc;
             padding: 20px;
             font-family: 'Courier New', Courier, monospace;
             border-radius: 8px;
@@ -21,9 +21,11 @@
             box-shadow: 0 0 15px rgba(0, 255, 204, 0.2);
             pointer-events: auto;
             user-select: none;
-            min-width: 200px;
+            min-width: 220px;
+            z-index: 100;
         }
         
+        /* Data Rows */
         .data-row {
             margin-bottom: 8px;
             font-size: 16px;
@@ -32,43 +34,52 @@
             justify-content: space-between;
         }
 
+        /* Headers */
         .sub-header {
             font-size: 12px;
             color: #ff0055;
-            margin-top: 10px;
+            margin-top: 15px;
             margin-bottom: 5px;
             text-transform: uppercase;
             border-bottom: 1px solid #ff0055;
+            padding-bottom: 2px;
         }
 
-        .debug-text {
-            color: #888;
-            font-size: 12px;
-            font-weight: normal;
-        }
+        .debug-text { color: #888; font-size: 12px; font-weight: normal; }
 
-        button {
-            margin-top: 15px;
-            background: #ff0055;
-            color: white;
-            border: none;
-            padding: 10px 15px;
+        /* Buttons */
+        .game-btn {
+            margin-top: 10px;
+            width: 100%;
+            padding: 12px;
             cursor: pointer;
             font-family: inherit;
             font-weight: bold;
             text-transform: uppercase;
             border-radius: 4px;
-            width: 100%;
-            transition: background 0.2s;
+            border: none;
+            transition: all 0.2s;
         }
 
-        button:hover {
-            background: #ff4477;
-            box-shadow: 0 0 10px #ff0055;
+        #reset-btn {
+            background: #ff0055;
+            color: white;
+            margin-bottom: 5px;
         }
+        #reset-btn:hover { background: #ff4477; box-shadow: 0 0 15px #ff0055; }
+
+        #restart-btn {
+            background: transparent;
+            color: #ff3333;
+            border: 1px solid #ff3333;
+            font-size: 11px;
+        }
+        #restart-btn:hover { background: #ff3333; color: white; box-shadow: 0 0 10px #ff3333; }
+
     </style>
 </head>
 <body>
+
     <div id="ui-container">
         <div class="data-row">TIME: <span id="time-current">00:00.00</span></div>
         <div class="data-row" style="color:#ff00cc">BEST: <span id="time-best">--:--.--</span></div>
@@ -82,7 +93,9 @@
         <div class="data-row debug-text">Y: <span id="pos-y">0</span></div>
         <div class="data-row debug-text">Z: <span id="pos-z">0</span></div>
 
-        <button id="reset-btn">RESPAWN CAR</button>
+        <div class="sub-header">Actions</div>
+        <button id="reset-btn" class="game-btn">RESPAWN CAR</button>
+        <button id="restart-btn" class="game-btn">RESET ALL RECORDS</button>
     </div>
 
     <script type="importmap">
