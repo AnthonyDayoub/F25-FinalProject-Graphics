@@ -46,7 +46,7 @@ module.exports = {
         new CopyWebpackPlugin({
             patterns: [
                 { from: path.resolve(__dirname, 'src/cyberpunk_car'), to: 'cyberpunk_car' },
-                { from: path.resolve(__dirname, 'src/mario_kart_8_deluxe_-_wii_moonview_highway'), to: 'mario_kart_8_deluxe_-_wii_moonview_highway' },
+                { from: path.resolve(__dirname, 'src/moonview_highway.glb'), to: 'moonview_highway.glb' },
             ],
         }),
     ],

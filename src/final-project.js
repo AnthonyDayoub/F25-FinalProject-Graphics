@@ -5,6 +5,10 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
+// --- ANTI-GHOST SYSTEM ---
+
+window.gameLoopId = null;
+
 const clock = new THREE.Clock();
 
 // --- UI Elements ---
@@ -87,6 +91,7 @@ const pointerState = { dragging: false, pointerId: null, lastX: 0, lastY: 0 };
 
 // --- COLLISION GLOBAL ---
 const mapColliders = []; 
+const ghostColliders = [];
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.shadowMap.enabled = true; 
@@ -311,13 +316,13 @@ function addSafetyNet() {
     const safetyFloor = new THREE.Mesh(geometry, material);
     
     // Position below the lowest road
-    safetyFloor.position.set(0, -5, 0); 
-    
-    // IMPORTANT: Name it so we can detect it later
+    safetyFloor.position.set(0, -20, 0); 
     safetyFloor.name = 'SafetyNet'; 
     
     scene.add(safetyFloor);
-    mapColliders.push(safetyFloor);
+    
+    // --- REMOVE THE "//" BELOW THIS LINE ---
+    mapColliders.push(safetyFloor); 
 }
 addSafetyNet();
 
@@ -337,13 +342,13 @@ class TimeTrialManager {
         // --- CHECKPOINT CONFIGURATION ---
         this.checkpoints = [
             // Checkpoint 1
-            { pos: new THREE.Vector3(315, 28, -121), rot: 0, radius: 20, passed: false }, 
+            { pos: new THREE.Vector3(370, 25, -130), rot: 0, radius: 20, passed: false }, 
             
             // Checkpoint 2
-            { pos: new THREE.Vector3(75, 50, 434), rot: 1.5, radius: 35, passed: false },
+            { pos: new THREE.Vector3(80, 47, 615), rot: 1.5, radius: 35, passed: false },
 
             // FINISH LINE
-            { pos: new THREE.Vector3(0, 18, 74), rot: 0, radius: 15, passed: false, isFinish: true } 
+            { pos: new THREE.Vector3(4, 10, 80), rot: 0, radius: 15, passed: false, isFinish: true } 
         ];
         
         this.nextCheckpointIndex = 0;
@@ -472,54 +477,74 @@ class CarControls {
     constructor(model, idleSoundRef, accelerationSoundRef) {
         this.model = model;
         
-        // --- 1. DEFAULT STATS ---
+        // --- SETUP ---
         this.maxSpeed = 120; 
         this.acceleration = 45;
         this.brakeStrength = 50;
         this.maxSteer = 0.04;
         this.gravity = 80;
         this.drag = 0.5;
+        this.rideHeight = 0.5; 
+        this.tiltSpeed = 0.08; 
+        this.carLength = 4.0; 
+        this.wallBounce = 0.5; 
 
-        // --- 2. STATES ---
         this.speed = 0;
         this.velocity = new THREE.Vector3();
         this.moveDirection = new THREE.Vector3(0, 0, -1);
         this.isGrounded = false;
         
-        // --- 3. PHYSICS SETUP ---
-        this.rideHeight = 0.5; 
-        this.tiltSpeed = 0.08; 
         this.badObjects = ["Object_63", "Object_78", "SafetyNet", "Object_54"];
-        
-        this.groundRaycaster = new THREE.Raycaster();
-        this.upRaycaster = new THREE.Raycaster();
-
-        // --- 4. RESTORED ORIGINAL SPAWN ---
         this.lastSafePosition = new THREE.Vector3(0, 30, 90); 
         this.lastSafeQuaternion = new THREE.Quaternion();
-        
         this.safePosTimer = 0;
         this.groundMemory = 0; 
         this.memoryDuration = 0.25;
         this.lastValidGroundY = -Infinity;
 
-        // Audio
+        this.groundRaycaster = new THREE.Raycaster();
+        this.upRaycaster = new THREE.Raycaster();
+        this.wallRaycaster = new THREE.Raycaster();
+
         this.idleSound = idleSoundRef || null;
         this.accelerationSound = accelerationSoundRef || null;
         this.engineSoundThreshold = 1;
-
-        // Input
         this.keys = { forward: false, backward: false, left: false, right: false, space: false };
-        this.canDrive = true; // Input Locked, but Physics will run
-
-        // Debug
-        this.debugMode = false;
-        this.rayHelper = new THREE.ArrowHelper(new THREE.Vector3(0,-1,0), this.model.position, 10, 0xffff00);
-        this.rayHelper.visible = false;
-        scene.add(this.rayHelper);
+        this.canDrive = true; 
 
         window.addEventListener('keydown', (e) => this.onKeyDown(e));
         window.addEventListener('keyup', (e) => this.onKeyUp(e));
+
+        // --- VISUAL DEBUGGERS ---
+        this.debugMode = false;
+        
+        // 1. Suspension Ray
+        this.arrowSuspension = new THREE.ArrowHelper(new THREE.Vector3(0,-1,0), new THREE.Vector3(), 15, 0x00ff00);
+        
+        // 2. Wall Ray
+        this.arrowWall = new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(), 6, 0xff0000);
+        
+        // 3. THE MIND SPHERE (Shows where physics "Thinks" the car is)
+        const sphereGeo = new THREE.SphereGeometry(2, 8, 8);
+        const sphereMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, transparent: true, opacity: 0.5 });
+        this.mindSphere = new THREE.Mesh(sphereGeo, sphereMat);
+
+        scene.add(this.arrowSuspension);
+        scene.add(this.arrowWall);
+        scene.add(this.mindSphere); // Add to scene, NOT car
+
+        this.arrowSuspension.visible = false;
+        this.arrowWall.visible = false;
+        this.mindSphere.visible = false;
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'v') {
+                this.debugMode = !this.debugMode;
+                this.arrowSuspension.visible = this.debugMode;
+                this.arrowWall.visible = this.debugMode;
+                this.mindSphere.visible = this.debugMode;
+            }
+        });
     }
 
     setEngineAudio(idleAudio, accelerationAudio) {
@@ -528,27 +553,25 @@ class CarControls {
         this.updateEngineAudio(true);
     }
 
-    // --- MENU HANDLER ---
-    startGame(settings) {
-        console.log("Stats Applied:", settings);
-        this.maxSpeed = settings.speed;
-        this.acceleration = settings.accel;
-        this.maxSteer = settings.steer;
-        
-        this.canDrive = true; // Unlock Input
-        // Note: We DO NOT reset position here anymore. 
-        // The car has likely already dropped to the road by now.
+    updateEngineAudio(forceIdle = false) {
+        if (!this.idleSound || !this.accelerationSound) return;
+        if (!this.idleSound.buffer || !this.accelerationSound.buffer) return;
+        const moving = Math.abs(this.speed) > this.engineSoundThreshold;
+        if (forceIdle || !moving) {
+            if (this.accelerationSound.isPlaying) this.accelerationSound.stop();
+            if (!this.idleSound.isPlaying) this.idleSound.play();
+        } else {
+            if (this.idleSound.isPlaying) this.idleSound.stop();
+            if (!this.accelerationSound.isPlaying) this.accelerationSound.play();
+        }
     }
 
     manualReset() {
         this.speed = 0;
         this.velocity.set(0, 0, 0);
-        
-        // Restore spawn
         this.model.position.set(0, 30, 90); 
         this.model.rotation.set(0, 0, 0);
         this.lastSafePosition.set(0, 30, 90);
-        
         this.moveDirection.set(0, 0, -1);
         this.groundMemory = 0;
         this.updateEngineAudio(true);
@@ -568,84 +591,167 @@ class CarControls {
     }
 
     onKeyDown(event) {
-        // We only block driving keys, not debug keys
         if (!this.canDrive && ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(event.code)) return;
-
-        if (event.key.toLowerCase() === 'v') {
-            this.debugMode = !this.debugMode;
-            this.rayHelper.visible = this.debugMode;
-        }
         switch (event.code) {
-        case 'KeyW': case 'ArrowUp': this.keys.forward = true; break;
-        case 'KeyS': case 'ArrowDown': this.keys.backward = true; break;
-        case 'KeyA': case 'ArrowLeft': this.keys.left = true; break;
-        case 'KeyD': case 'ArrowRight': this.keys.right = true; break;
-        case 'Space': this.keys.space = true; break; 
+            case 'KeyW': case 'ArrowUp': this.keys.forward = true; break;
+            case 'KeyS': case 'ArrowDown': this.keys.backward = true; break;
+            case 'KeyA': case 'ArrowLeft': this.keys.left = true; break;
+            case 'KeyD': case 'ArrowRight': this.keys.right = true; break;
+            case 'Space': this.keys.space = true; break; 
         }
     }
 
     onKeyUp(event) {
         switch (event.code) {
-        case 'KeyW': case 'ArrowUp': this.keys.forward = false; break;
-        case 'KeyS': case 'ArrowDown': this.keys.backward = false; break;
-        case 'KeyA': case 'ArrowLeft': this.keys.left = false; break;
-        case 'KeyD': case 'ArrowRight': this.keys.right = false; break;
-        case 'Space': this.keys.space = false; break;
+            case 'KeyW': case 'ArrowUp': this.keys.forward = false; break;
+            case 'KeyS': case 'ArrowDown': this.keys.backward = false; break;
+            case 'KeyA': case 'ArrowLeft': this.keys.left = false; break;
+            case 'KeyD': case 'ArrowRight': this.keys.right = false; break;
+            case 'Space': this.keys.space = false; break;
+        }
+    }
+
+    // --- VISUAL DEBUG SYNC ---
+    updateDebugVisuals(suspensionOrigin, wallOrigin, wallDir) {
+        if (!this.debugMode) return;
+        if (!this.arrowSuspension || !this.arrowWall || !this.mindSphere) return;
+
+        this.arrowSuspension.position.copy(suspensionOrigin);
+        this.arrowSuspension.setDirection(new THREE.Vector3(0, -1, 0));
+
+        this.arrowWall.position.copy(wallOrigin);
+        this.arrowWall.setDirection(wallDir);
+
+        // Snap Mind Sphere to the origin of the wall ray
+        // This shows exactly where the physics engine is "Standing"
+        this.mindSphere.position.copy(wallOrigin);
+    }
+
+    // --- THE FIX: PURE WORLD SPACE COLLISION ---
+    checkWallCollisions() {
+        if (Math.abs(this.speed) < 1.0) return; 
+
+        // 1. Get ABSOLUTE WORLD Position & Rotation
+        // We do not trust '.position' or '.quaternion' (Local)
+        const worldPos = new THREE.Vector3();
+        const worldQuat = new THREE.Quaternion();
+        this.model.getWorldPosition(worldPos);
+        this.model.getWorldQuaternion(worldQuat);
+
+        // 2. Calculate Forward Direction using WORLD Rotation
+        const forwardDir = new THREE.Vector3(0, 0, (this.speed > 0 ? -1 : 1));
+        forwardDir.applyQuaternion(worldQuat).normalize();
+        
+        // 3. Ray Origin
+        const rayOrigin = worldPos.clone();
+        rayOrigin.y += 2.0; 
+
+        this.wallRaycaster.set(rayOrigin, forwardDir);
+        this.wallRaycaster.far = this.carLength + 2.0; 
+
+        const hits = this.wallRaycaster.intersectObjects(mapColliders);
+
+        if (hits.length > 0) {
+            const hit = hits[0];
+            if (hit.object.name === "SafetyNet") return;
+            if (!hit.face || !hit.face.normal) return;
+
+            const normal = hit.face.normal.clone();
+            normal.transformDirection(hit.object.matrixWorld).normalize();
+
+            if (isNaN(normal.x) || isNaN(normal.y)) return;
+
+            const specialTolerances = {
+                "Object_40_1": 0.1, 
+                "Object_22": 1.0,
+                "Object_34_1": 0.2,
+                "Object_35_1": 0.2,
+            };
+            let activeTolerance = 0.5; 
+            if (specialTolerances[hit.object.name] !== undefined) {
+                activeTolerance = specialTolerances[hit.object.name];
+            }
+
+            if (Math.abs(normal.y) > activeTolerance) return; 
+
+            // --- CRASH ---
+            if (hit.distance < this.carLength) {
+                console.log(`💥 Hit Wall: ${hit.object.name}`);
+                this.speed = -this.speed * this.wallBounce;
+                
+                // Push car out
+                const pushOut = forwardDir.clone().multiplyScalar(-1.5);
+                this.model.position.add(pushOut);
+
+                // *** CRITICAL FIX ***
+                // Force the visual model to update its math instantly
+                // so the next frame's physics sees the new position
+                this.model.updateMatrixWorld(true);
+            }
         }
     }
 
     update(deltaTime) {
-        // --- 1. INPUT LOGIC (Only runs if unlocked) ---
         if (this.canDrive) {
             if (this.keys.forward) this.speed += this.acceleration * deltaTime;
             else if (this.keys.backward) this.speed -= this.brakeStrength * deltaTime;
             else this.speed *= (1 - this.drag * deltaTime);
             
-            // Steering
             const isDrifting = this.keys.space && Math.abs(this.speed) > 10;
             if (this.keys.left) this.steering = this.maxSteer * (isDrifting ? 1.5 : 1.0);
             else if (this.keys.right) this.steering = -this.maxSteer * (isDrifting ? 1.5 : 1.0);
             else this.steering = 0;
         } else {
-            // If locked, just slow down naturally
             this.speed *= (1 - this.drag * deltaTime);
             this.steering = 0;
         }
 
-        // Clamp Speed
-        this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed / 2, this.maxSpeed);
+        this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed, this.maxSpeed);
 
-        // Apply Rotation
-        if (Math.abs(this.speed) > 0.1) this.model.rotateY(this.steering * (this.speed > 0 ? 1 : -1));
+        if (Math.abs(this.speed) > 0.1) {
+            this.model.rotateY(this.steering * (this.speed > 0 ? 1 : -1));
+        }
+        
+        // Update Matrix BEFORE reading it for vectors
+        this.model.updateMatrixWorld(true);
 
-        // Calculate Velocity Vector
-        const carFacingDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.model.quaternion);
-        // Drift Factor
+        // --- PREPARE DATA (WORLD SPACE) ---
+        const worldPos = new THREE.Vector3();
+        const worldQuat = new THREE.Quaternion();
+        this.model.getWorldPosition(worldPos);
+        this.model.getWorldQuaternion(worldQuat);
+
+        const forwardDir = new THREE.Vector3(0, 0, (this.speed > 0 ? -1 : 1));
+        forwardDir.applyQuaternion(worldQuat).normalize();
+        
+        const wallRayOrigin = worldPos.clone(); 
+        wallRayOrigin.y += 2.0; 
+        const suspRayOrigin = worldPos.clone();
+        suspRayOrigin.y += 5.0; 
+
+        // Physics Checks
+        this.checkWallCollisions();
+
+        // Movement
+        const carFacingDir = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat); // Changed to worldQuat
         const grip = (this.keys.space && Math.abs(this.speed) > 10) ? 0.05 : 0.8; 
         this.moveDirection.lerp(carFacingDir, grip).normalize();
         if (Math.abs(this.speed) < 5) this.moveDirection.copy(carFacingDir);
 
         this.velocity.x = this.moveDirection.x * this.speed;
         this.velocity.z = this.moveDirection.z * this.speed;
-        this.velocity.y -= this.gravity * deltaTime; 
-
-        // --- 2. PHYSICS (ALWAYS RUNS) ---
-        // This ensures the car drops to the floor even if the menu is open
         
-        let rayOrigin = this.model.position.clone();
-        rayOrigin.y += 5.0; 
+        // Ground Physics
+        let rayOrigin = suspRayOrigin.clone();
         this.groundRaycaster.set(rayOrigin, new THREE.Vector3(0, -1, 0));
         this.groundRaycaster.far = 15.0; 
         let hits = this.groundRaycaster.intersectObjects(mapColliders);
 
-        let isRayHittingSomething = false;
         let groundHit = null;
-
         if (hits.length > 0) groundHit = hits[0];
 
-        // Submarine Check
         if (!groundHit) {
-            this.upRaycaster.set(this.model.position, new THREE.Vector3(0, 1, 0));
+            this.upRaycaster.set(worldPos, new THREE.Vector3(0, 1, 0));
             this.upRaycaster.far = 5.0; 
             const upHits = this.upRaycaster.intersectObjects(mapColliders);
             if (upHits.length > 0) {
@@ -654,14 +760,14 @@ class CarControls {
             }
         }
 
+        let isRayHittingSomething = false;
         if (groundHit) {
             const name = groundHit.object.name;
             const isBadObject = this.badObjects.includes(name) || name.includes("SafetyNet");
 
             if (!isBadObject) {
                 let groundNormal = groundHit.face.normal.clone().applyQuaternion(groundHit.object.quaternion);
-                const up = new THREE.Vector3(0, 1, 0);
-                const angle = groundNormal.angleTo(up); 
+                const angle = groundNormal.angleTo(new THREE.Vector3(0, 1, 0)); 
 
                 if (angle < 1.0 || groundHit.distance < 0) { 
                     const targetY = groundHit.point.y + this.rideHeight;
@@ -677,14 +783,14 @@ class CarControls {
                         this.model.position.y = THREE.MathUtils.lerp(this.model.position.y, targetY, 0.5);
 
                         if (angle < 1.0) {
-                            const currentLook = new THREE.Vector3(0, 0, -1).applyQuaternion(this.model.quaternion);
+                            // Alignment Logic
+                            const currentLook = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat); // World Quat
                             const project = currentLook.clone().sub(groundNormal.clone().multiplyScalar(currentLook.dot(groundNormal))).normalize();
                             const targetRot = new THREE.Matrix4().lookAt(new THREE.Vector3(), project, groundNormal);
                             const targetQuat = new THREE.Quaternion().setFromRotationMatrix(targetRot);
                             this.model.quaternion.slerp(targetQuat, this.tiltSpeed);
                         }
 
-                        // Only save safe position if moving fast enough
                         this.safePosTimer += deltaTime;
                         if (this.safePosTimer > 1.0 && Math.abs(this.speed) > 5) {
                             this.lastSafePosition.copy(this.model.position);
@@ -705,26 +811,30 @@ class CarControls {
                 this.velocity.y = 0;
                 this.isGrounded = true; 
             } else {
+                this.velocity.y -= this.gravity * deltaTime; 
                 this.isGrounded = false;
                 this.safePosTimer = 0;
             }
         }
 
-        if (this.debugMode) {
-            this.rayHelper.position.copy(rayOrigin);
-            this.rayHelper.setColor(new THREE.Color(isRayHittingSomething ? 0x00ff00 : 0xff0000));
+        this.model.position.addScaledVector(this.velocity, deltaTime);
+        if(this.model.position.y < -10) this.hardRespawn();
+
+        // Stabilizer
+        if (this.isGrounded) {
+             const euler = new THREE.Euler().setFromQuaternion(this.model.quaternion, 'YXZ');
+             euler.x *= 0.9; 
+             euler.z *= 0.9; 
+             this.model.quaternion.setFromEuler(euler);
         }
 
-        this.model.position.addScaledVector(this.velocity, deltaTime);
-        if(this.model.position.y < -50) this.hardRespawn();
-
-        // UI
-        if (uiSpeed) uiSpeed.innerText = Math.abs(this.speed).toFixed(1);
-        if (uiPosX) uiPosX.innerText = this.model.position.x.toFixed(1);
-        if (uiPosY) uiPosY.innerText = this.model.position.y.toFixed(1);
-        if (uiPosZ) uiPosZ.innerText = this.model.position.z.toFixed(1);
-        
         this.updateEngineAudio();
+        this.updateDebugVisuals(suspRayOrigin, wallRayOrigin, forwardDir);
+
+        if (typeof uiSpeed !== 'undefined') uiSpeed.innerText = Math.abs(this.speed).toFixed(1);
+        if (typeof uiPosX !== 'undefined') uiPosX.innerText = worldPos.x.toFixed(1);
+        if (typeof uiPosY !== 'undefined') uiPosY.innerText = worldPos.y.toFixed(1);
+        if (typeof uiPosZ !== 'undefined') uiPosZ.innerText = worldPos.z.toFixed(1);
     }
 
     
@@ -740,72 +850,93 @@ class CarControls {
             if (!this.accelerationSound.isPlaying) this.accelerationSound.play();
         }
     }
+
+  // --- SAFE DEBUG UPDATE ---
+  updateDebugVisuals(suspensionOrigin, wallOrigin, wallDir) {
+    // 1. If debug is off, do nothing
+    if (!this.debugMode) return;
+
+    // 2. Safe Checks: Only update things if they actually exist
+    if (this.arrowSuspension) {
+        this.arrowSuspension.position.copy(suspensionOrigin);
+        this.arrowSuspension.setDirection(new THREE.Vector3(0, -1, 0));
+    }
+
+    if (this.arrowWall) {
+        this.arrowWall.position.copy(wallOrigin);
+        this.arrowWall.setDirection(wallDir);
+    }
+
+    if (this.mindSphere) {
+        this.mindSphere.position.copy(wallOrigin);
+    }
+
+    // 3. THE CRASH FIX: Check if boxHelper exists before updating
+    if (this.boxHelper) {
+        this.boxHelper.update();
+    }
+}
+    
 }
 // --- Loaders ---
 export function levelOneBackground() {
-    const draco = new DRACOLoader();
-    draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
-    const trackLoader = new GLTFLoader();
-    trackLoader.setDRACOLoader(draco);
-    trackLoader.setPath('mario_kart_8_deluxe_-_wii_moonview_highway/');
+    console.log("LOADING MAP: moonview_highway.glb");
 
-    scene.background = new THREE.Color(0x05070f);
+    const loader = new GLTFLoader();
+    
+    loader.load('moonview_highway.glb', (gltf) => {
+        console.log("MAP LOADED!");
+        const model = gltf.scene;
 
-    trackLoader.load(
-        'scene.gltf',
-        (gltf) => {
-            console.log('Map loaded - Filtering Invisible Walls');
-            const model = gltf.scene;
-            model.position.set(0, 0, 0); 
-            scene.add(model);
+        model.scale.set(600.0, 600.0, 600.0); 
+        model.position.set(0, -10, 0); 
+        
+        scene.add(model);
 
-            model.traverse((child) => {
-                if (child.isLight) {
-                    child.parent?.remove(child); 
-                } else if (child.isMesh) {
-                    child.geometry.scale(0.1, 0.1, 0.1);
-                    child.material.side = THREE.DoubleSide;
-                    
-                    child.receiveShadow = true;
-                    child.castShadow = true;
-                    styleMeshForNeon(child);
+        // --- THE BAN LIST ---
+        // Any object name containing these words becomes a GHOST (Blue Grid)
+        const noCollisionKeywords = [
+            
+            "Object_0",
+            "Object_23_1",
+            "Object_22",
+            //"Object_35_1",
+           "Object_57_1",
+            "Object_17_1",
+            //"Object_7_1"
+            //"Object_34_1",
+            "Object_16_1",
+            "Object_41",
+           
+        
+        ];
 
-                    // --- FILTERING LOGIC ---
-                    bboxHelper.setFromObject(child);
-                    bboxHelper.getSize(sizeHelper);
+        model.traverse((child) => {
+            if (child.isMesh) {
+                // 1. Visuals
+                child.castShadow = true;
+                child.receiveShadow = true;
+                styleMeshForNeon(child); 
 
-                    // Filter 1: Ignore extremely tall boxes that aren't wide (Likely buildings/signs)
-                    // If height > 20 AND height > width * 2, it's a pole or building.
-                    const isTallBuilding = sizeHelper.y > 20 && sizeHelper.y > Math.max(sizeHelper.x, sizeHelper.z) * 1.5;
-                    
-                    // Filter 2: Ignore specific "Object_63" type names if they are problematic
-                    // (You can add specific names here if you find them with the clicker)
-                    const isBadObject = child.name.includes("Object_X"); 
+                // 2. Physics Sorting
+                // check if the name matches any banned word
+                const isBanned = noCollisionKeywords.some(keyword => child.name.includes(keyword));
 
-                    if (!isTallBuilding && !isBadObject) {
-                        mapColliders.push(child);
-                    }
-             
-                    else {
-                         // Optional: Visualize what we removed (Red wireframe)
-                         // const removed = new THREE.BoxHelper(child, 0xff0000);
-                         // scene.add(removed);
-                    }
-
-                    addMeshToSector(child);
+                if (!isBanned) {
+                    // SOLID WALL (Magenta)
+                    mapColliders.push(child);
+                } else {
+                    // GHOST OBJECT (Blue)
+                    ghostColliders.push(child); 
                 }
-            });
-
-            if (trackSectors.length <= 1) {
-                sectorCullingEnabled = false;
-                forceAllSectorsVisible();
             }
-        },
-        null,
-        (err) => console.error('Map GLTF load error:', err)
+        });
+
+    }, 
+    (xhr) => { console.log("Map: " + ((xhr.loaded / xhr.total) * 100).toFixed(0) + "%"); },
+    (error) => { console.error("MAP ERROR:", error); }
     );
 }
-// Load Car
 // Load Car
 const loader = new GLTFLoader();
 loader.setPath('cyberpunk_car/');
@@ -874,49 +1005,87 @@ window.addEventListener('keydown', (event) => {
     }
 });
 
+// ww--- THE UI TRACKER (The "Ghost Hunter") ---
+const trackerGeo = new THREE.SphereGeometry(3, 16, 16);
+const trackerMat = new THREE.MeshBasicMaterial({ 
+    color: 0xFF00FF, // MAGENTA = "Where the UI thinks you are"
+    wireframe: false,
+    transparent: true,
+    opacity: 0.8
+});
+const uiTrackerSphere = new THREE.Mesh(trackerGeo, trackerMat);
 
-// --- Render Loop ---
-// --- Render Loop ---
+
+// Add a label to it so we don't get confused
+const trackerLabelDiv = document.createElement('div');
+trackerLabelDiv.className = 'label';
+trackerLabelDiv.textContent = 'GHOST / UI';
+trackerLabelDiv.style.marginTop = '-1em';
+trackerLabelDiv.style.color = '#ff00ff';
+trackerLabelDiv.style.fontSize = '12px';
+trackerLabelDiv.style.position = 'absolute';
+trackerLabelDiv.style.textShadow = '0 0 4px black';
+trackerLabelDiv.style.display = 'none'; // Hidden for now unless you want to add CSS2DObject
+document.body.appendChild(trackerLabelDiv);
+
+
+// --- THE INVINCIBLE LOOP ---
 function animate() {
+    const canvas = renderer.domElement;
+    
+    // 1. Tag the Canvas with our new Loop ID
+    // If we haven't assigned an ID yet, generate a random one (like a fingerprint)
+    if (!canvas.dataset.loopId) {
+        canvas.dataset.loopId = Math.random().toString();
+    }
+    const myLoopId = canvas.dataset.loopId;
+
+    // 2. The Check
+    // If the canvas has a DIFFERENT ID than mine, it means a NEW loop has started.
+    // I am the old ghost. I must stop.
+    if (window.currentLoopId && window.currentLoopId !== myLoopId) {
+        // console.log("👻 Ghost Loop detected and stopped.");
+        return; // STOP! Do not request new frame.
+    }
+    
+    // Set the global "Current" ID to mine, so older loops know to quit
+    window.currentLoopId = myLoopId;
+
     requestAnimationFrame(animate);
 
+    // --- GAME LOGIC ---
     const deltaTime = clock.getDelta();
 
-    // 1. PHYSICS (Move the Car Object)
     if (carController) {
         carController.update(deltaTime);
-        
-        // Update Time Trial Logic
-        if (typeof timeTrial !== 'undefined') {
-            timeTrial.update(carModel.position);
-        }
+        if (typeof timeTrial !== 'undefined') timeTrial.update(carModel.position);
     }
 
-    // 2. CAMERA (Follow the Car Object)
+    // Camera Logic
     if (carModel) {
-        // Get the new position after physics moved it
         carModel.getWorldPosition(carWorldPosition);
         carModel.getWorldQuaternion(carWorldQuaternion);
+        if (typeof updateSectorVisibility === 'function') updateSectorVisibility(carWorldPosition);
 
-        // Optimization: Show/Hide map chunks
-        updateSectorVisibility(carWorldPosition);
-
-        // Calculate Camera Target Position
         followSpherical.radius = THREE.MathUtils.clamp(followSpherical.radius, minCameraDistance, maxCameraDistance);
         relativeCameraOffset.setFromSpherical(followSpherical);
         relativeCameraOffset.applyQuaternion(carWorldQuaternion); 
         desiredCameraPosition.copy(carWorldPosition).add(relativeCameraOffset);
         
-        // Smoothly Move Camera (The "Lag" effect)
         camera.position.lerp(desiredCameraPosition, chaseLerpFactor);
-
-        // Look at the Car
         lookAtTarget.copy(carWorldPosition).add(lookAtOffset);
         camera.lookAt(lookAtTarget);
     }
+    
+    // UI Tracker (The Pink Sphere Logic)
+    if (typeof uiTrackerSphere !== 'undefined') {
+        const ghostX = parseFloat(document.getElementById('pos-x').innerText);
+        const ghostY = parseFloat(document.getElementById('pos-y').innerText);
+        const ghostZ = parseFloat(document.getElementById('pos-z').innerText);
+        if (!isNaN(ghostX)) uiTrackerSphere.position.set(ghostX, ghostY, ghostZ);
+    }
 
-    // 3. RENDER
-    composer.render();
+    renderer.render(scene, camera);
 }
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -929,73 +1098,80 @@ levelOneBackground();
 animate();
 
 // --- DEBUG TOOL: Collision Vision ---
-// Press 'C' to toggle collision highlights
 let debugGroup = null;
 
+// Material 1: HARD WALLS (Magenta)
+const debugMaterial = new THREE.MeshBasicMaterial({
+    color: 0xff00ff, 
+    wireframe: true,
+    depthTest: false,
+    transparent: true,
+    opacity: 0.5
+});
+
+// Material 2: GHOST OBJECTS (Electric Blue)
+const debugGhostMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00aaff, 
+    wireframe: true,
+    depthTest: false,
+    transparent: true,
+    opacity: 0.3 // Slightly more transparent than walls
+});
+
 function toggleCollisionDebug() {
-    // 1. If debug is currently ON, turn it OFF
+    console.log("👉 Toggling Debug..."); 
+
+    // 1. Turn OFF
     if (debugGroup) {
         scene.remove(debugGroup);
+        // Dispose geometries to free memory
+        debugGroup.traverse(child => { if(child.isMesh) child.geometry.dispose(); });
         debugGroup = null;
         
-        // Hide the Safety Net again
+        // Hide Safety Net
         const net = mapColliders.find(obj => obj.name === 'SafetyNet');
-        if (net) {
-            net.visible = false;
-            // Restore original material properties if needed
-            net.material.wireframe = false;
-        }
+        if (net) { net.visible = false; net.material.wireframe = false; }
         
-        console.log("Collision Debug: OFF");
+        console.log("❌ Debug: OFF");
         return;
     }
 
-    // 2. If debug is OFF, turn it ON
-    console.log("Collision Debug: ON (Magenta = Road, Red = SafetyNet)");
+    // 2. Turn ON
+    if (mapColliders.length === 0) {
+        console.warn("⚠️ Map not loaded yet.");
+        return;
+    }
+
+    console.log(`✅ Debug: ON (Walls: ${mapColliders.length}, Ghosts: ${ghostColliders.length})`);
     debugGroup = new THREE.Group();
-    
     scene.add(debugGroup);
 
-    // Create a shared material for the overlay
-    const wireframeMat = new THREE.MeshBasicMaterial({
-        color: 0xff00ff, // Hot Pink/Magenta
-        wireframe: true,
-        transparent: true,
-        opacity: 0.3,
-        depthTest: false // Draw ON TOP of everything (X-ray view)
-    });
+    // Helper Function to draw a list
+    const addDebugMeshes = (list, material) => {
+        list.forEach(obj => {
+            if (obj.name === 'SafetyNet') {
+                obj.visible = true;
+                obj.material.color.setHex(0xff0000); 
+                obj.material.wireframe = true;
+                return; 
+            }
 
-    mapColliders.forEach(obj => {
-        // Special Case: The Safety Net
-        if (obj.name === 'SafetyNet') {
-            obj.visible = true;
-            obj.material.color.setHex(0xff0000); // Red
-            obj.material.wireframe = true;
-            obj.material.transparent = true;
-            obj.material.opacity = 0.5;
-            return; // Don't add a clone, just show the real mesh
-        }
+            if (obj.geometry) {
+                const clone = new THREE.Mesh(obj.geometry, material);
+                obj.updateWorldMatrix(true, false);
+                clone.applyMatrix4(obj.matrixWorld);
+                debugGroup.add(clone);
+            }
+        });
+    };
 
-        // Standard Case: Roads & Buildings
-        // We create a clone mesh so we don't ruin the original textures
-        if (obj.geometry) {
-            const clone = new THREE.Mesh(obj.geometry, wireframeMat);
-            
-            // Copy transform exactly
-            clone.position.copy(obj.position);
-            clone.rotation.copy(obj.rotation);
-            clone.scale.copy(obj.scale);
-            
-            // Add to the debug group
-            debugGroup.add(clone);
-        }
-    });
+    // Draw Both Lists
+    addDebugMeshes(mapColliders, debugMaterial);      // Magenta
+    addDebugMeshes(ghostColliders, debugGhostMaterial); // Blue
 }
 
-// Bind to Key 'C'
+// Bind Key
 window.addEventListener('keydown', (event) => {
-    if (event.key.toLowerCase() === 'c') {
-        toggleCollisionDebug();
-    }
+    if (event.repeat) return;
+    if (event.code === 'KeyC') toggleCollisionDebug();
 });
-
