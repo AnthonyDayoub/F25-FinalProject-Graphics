@@ -6,7 +6,6 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 // --- ANTI-GHOST SYSTEM ---
-
 window.gameLoopId = null;
 
 const clock = new THREE.Clock();
@@ -32,6 +31,8 @@ function formatTime(seconds) {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
 }
 
+
+
 // --- Basic Scene Setup ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x01030a); 
@@ -43,29 +44,50 @@ const defaultCameraTarget = new THREE.Vector3(0, 0, 0);
 camera.position.copy(defaultCameraPosition);
 camera.lookAt(defaultCameraTarget);
 
+// --- AUDIO SETUP (With Ghost Killer) ---
+// 1. Kill old audio engine if it exists from previous reload
+if (window.globalAudioContext) {
+    window.globalAudioContext.close();
+}
+// --- AUDIO SETUP ---
 const listener = new THREE.AudioListener();
 camera.add(listener);
+
 let carController = null;
 const audioLoader = new THREE.AudioLoader();
+
 const idleSound = new THREE.Audio(listener);
 const accelerationSound = new THREE.Audio(listener);
+const driftSound = new THREE.Audio(listener); 
 
 const tryAttachAudio = () => {
-    if (carController && idleSound.buffer && accelerationSound.buffer) {
-        carController.setEngineAudio(idleSound, accelerationSound);
+    // Wait for ALL 3 sounds to load
+    if (carController && idleSound.buffer && accelerationSound.buffer && driftSound.buffer) {
+        carController.setEngineAudio(idleSound, accelerationSound, driftSound);
     }
 };
 
 audioLoader.load('idle.mp3', (buffer) => {
     idleSound.setBuffer(buffer);
     idleSound.setLoop(true);
-    idleSound.setVolume(0.35);
+    idleSound.setVolume(0);
     tryAttachAudio();
 });
+
 audioLoader.load('acceleration.mp3', (buffer) => {
     accelerationSound.setBuffer(buffer);
     accelerationSound.setLoop(true);
-    accelerationSound.setVolume(0.35);
+    // Start Silent (We fade it in when driving)
+    accelerationSound.setVolume(0); 
+    tryAttachAudio();
+});
+
+audioLoader.load('drift.mp3', (buffer) => {
+    
+    driftSound.setBuffer(buffer);
+    driftSound.setLoop(true);
+    // Start Silent (We fade it in when drifting)
+    driftSound.setVolume(0);  
     tryAttachAudio();
 });
 
@@ -473,66 +495,89 @@ class TimeTrialManager {
     }
 }
 const timeTrial = new TimeTrialManager(uiTimeCurrent, uiTimeBest, uiLapCount);
+
+function createSmokeTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    
+    // REDUCED RADIUS: 32 -> 28
+    // This leaves a 4px buffer of empty space so the corners are invisible
+    const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 28);
+    
+    grad.addColorStop(0, 'rgba(255, 255, 255, 1)');     // White center
+    grad.addColorStop(0.3, 'rgba(255, 255, 255, 0.8)'); // Fluffy body
+    grad.addColorStop(1, 'rgba(255, 255, 255, 0)');     // Transparent edge
+    
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    return texture;
+}
+
 class CarControls {
-    constructor(model, idleSoundRef, accelerationSoundRef) {
+    constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef) {
         this.model = model;
         
-        // --- SETUP ---
+        // --- 1. TUNED CAR STATS ---
         this.maxSpeed = 120; 
         this.acceleration = 45;
         this.brakeStrength = 50;
-        this.maxSteer = 0.04;
-        this.gravity = 80;
+        this.maxSteer = 0.005; 
+        this.gravity = 180;
         this.drag = 0.5;
+
+        // --- 2. PHYSICS CONSTANTS ---
         this.rideHeight = 0.5; 
         this.tiltSpeed = 0.08; 
         this.carLength = 4.0; 
-        this.wallBounce = 0.5; 
+        this.wallBounce = 0.2; 
 
+        // --- 3. STATE ---
         this.speed = 0;
         this.velocity = new THREE.Vector3();
         this.moveDirection = new THREE.Vector3(0, 0, -1);
         this.isGrounded = false;
+        this.isDriftingState = false;
         
         this.badObjects = ["Object_63", "Object_78", "SafetyNet", "Object_54"];
         this.lastSafePosition = new THREE.Vector3(0, 30, 90); 
         this.lastSafeQuaternion = new THREE.Quaternion();
         this.safePosTimer = 0;
+        
         this.groundMemory = 0; 
-        this.memoryDuration = 0.25;
+        this.memoryDuration = 0.1; 
         this.lastValidGroundY = -Infinity;
 
+        // --- 4. RAYCASTERS ---
         this.groundRaycaster = new THREE.Raycaster();
         this.upRaycaster = new THREE.Raycaster();
         this.wallRaycaster = new THREE.Raycaster();
 
+        // --- 5. AUDIO & INPUT ---
         this.idleSound = idleSoundRef || null;
         this.accelerationSound = accelerationSoundRef || null;
-        this.engineSoundThreshold = 1;
+        this.driftSound = driftSoundRef || null;
+        
         this.keys = { forward: false, backward: false, left: false, right: false, space: false };
         this.canDrive = true; 
 
         window.addEventListener('keydown', (e) => this.onKeyDown(e));
         window.addEventListener('keyup', (e) => this.onKeyUp(e));
 
-        // --- VISUAL DEBUGGERS ---
+        // --- 6. VISUAL DEBUGGERS ---
         this.debugMode = false;
-        
-        // 1. Suspension Ray
         this.arrowSuspension = new THREE.ArrowHelper(new THREE.Vector3(0,-1,0), new THREE.Vector3(), 15, 0x00ff00);
-        
-        // 2. Wall Ray
         this.arrowWall = new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(), 6, 0xff0000);
-        
-        // 3. THE MIND SPHERE (Shows where physics "Thinks" the car is)
-        const sphereGeo = new THREE.SphereGeometry(2, 8, 8);
-        const sphereMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, transparent: true, opacity: 0.5 });
-        this.mindSphere = new THREE.Mesh(sphereGeo, sphereMat);
-
+        this.mindSphere = new THREE.Mesh(
+            new THREE.SphereGeometry(2, 8, 8), 
+            new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, transparent: true, opacity: 0.5 })
+        );
         scene.add(this.arrowSuspension);
         scene.add(this.arrowWall);
-        scene.add(this.mindSphere); // Add to scene, NOT car
-
+        scene.add(this.mindSphere); 
         this.arrowSuspension.visible = false;
         this.arrowWall.visible = false;
         this.mindSphere.visible = false;
@@ -545,24 +590,96 @@ class CarControls {
                 this.mindSphere.visible = this.debugMode;
             }
         });
+
+        // --- 7. SMOKE PARTICLE SYSTEM ---
+        this.smokeParticles = [];
+        const smokeTex = createSmokeTexture();
+        const smokeMat = new THREE.SpriteMaterial({ 
+            map: smokeTex, 
+            color: 0xffffff, 
+            transparent: true, 
+            opacity: 0.9,    
+            depthWrite: false 
+        });
+
+        for (let i = 0; i < 40; i++) {
+            const p = new THREE.Sprite(smokeMat);
+            p.visible = false;
+            p.scale.set(4, 4, 4); 
+            scene.add(p);
+            this.smokeParticles.push({ mesh: p, life: 0 });
+        }
+        
+        this.smokeTimer = 0; 
     }
 
-    setEngineAudio(idleAudio, accelerationAudio) {
-        this.idleSound = idleAudio;
-        this.accelerationSound = accelerationAudio;
-        this.updateEngineAudio(true);
+    // --- AUDIO SYSTEM (THE FIX: Play Everything, Adjust Volume) ---
+    setEngineAudio(idle, accel, drift) {
+        this.idleSound = idle;
+        this.accelerationSound = accel;
+        this.driftSound = drift;
+        
+        // 1. Play ALL sounds immediately (Looping)
+        if(this.idleSound && !this.idleSound.isPlaying) this.idleSound.play();
+        if(this.accelerationSound && !this.accelerationSound.isPlaying) this.accelerationSound.play();
+        if(this.driftSound && !this.driftSound.isPlaying) this.driftSound.play();
+
+        // 2. Set initial volumes
+        if(this.idleSound) this.idleSound.setVolume(0);
+        if(this.accelerationSound) this.accelerationSound.setVolume(0); // Start Silent
+        if(this.driftSound) this.driftSound.setVolume(0);             // Start Silent
     }
 
-    updateEngineAudio(forceIdle = false) {
-        if (!this.idleSound || !this.accelerationSound) return;
-        if (!this.idleSound.buffer || !this.accelerationSound.buffer) return;
-        const moving = Math.abs(this.speed) > this.engineSoundThreshold;
-        if (forceIdle || !moving) {
-            if (this.accelerationSound.isPlaying) this.accelerationSound.stop();
-            if (!this.idleSound.isPlaying) this.idleSound.play();
-        } else {
-            if (this.idleSound.isPlaying) this.idleSound.stop();
+    updateEngineAudio() {
+        if (!this.idleSound || !this.accelerationSound || !this.driftSound) return;
+        
+        // 1. Browser Autoplay Fix: Resume context if locked
+        if (this.idleSound.context && this.idleSound.context.state === 'suspended') {
+            this.idleSound.context.resume();
+        }
+
+        const isMoving = Math.abs(this.speed) > 1.0; 
+
+        if (isMoving) {
+            // --- DRIVE MODE ---
+            
+            // ACCEL: Ensure playing & Loud
             if (!this.accelerationSound.isPlaying) this.accelerationSound.play();
+            this.accelerationSound.setVolume(0.5);
+            
+            // Pitch Shift
+            const speedRatio = Math.min(Math.abs(this.speed) / this.maxSpeed, 1.0);
+            this.accelerationSound.setPlaybackRate(0.8 + (speedRatio * 0.7));
+
+            // IDLE: Mute (Don't stop, just mute)
+            this.idleSound.setVolume(0);
+
+        } else {
+            // --- IDLE MODE ---
+            
+            // IDLE: Ensure playing & Loud
+            if (!this.idleSound.isPlaying) this.idleSound.play();
+            this.idleSound.setVolume(0.5);
+
+            // ACCEL: Mute
+            this.accelerationSound.setVolume(0);
+        }
+
+        // --- DRIFT AUDIO ---
+        if (this.isDriftingState && this.isGrounded && Math.abs(this.speed) > 20) {
+            // Force play if it stopped
+            if (!this.driftSound.isPlaying) this.driftSound.play();
+            
+            // Fade In
+            const currentVol = this.driftSound.getVolume();
+            this.driftSound.setVolume(THREE.MathUtils.lerp(currentVol, 0.6, 0.2));
+        } else {
+            // Fade Out
+            const currentVol = this.driftSound.getVolume();
+            this.driftSound.setVolume(THREE.MathUtils.lerp(currentVol, 0, 0.2));
+            
+            // Optional: Stop if silent to be clean
+            if(currentVol < 0.01 && this.driftSound.isPlaying) this.driftSound.stop();
         }
     }
 
@@ -574,7 +691,6 @@ class CarControls {
         this.lastSafePosition.set(0, 30, 90);
         this.moveDirection.set(0, 0, -1);
         this.groundMemory = 0;
-        this.updateEngineAudio(true);
     }
 
     hardRespawn() {
@@ -590,6 +706,7 @@ class CarControls {
         this.groundMemory = 0;
     }
 
+    // --- INPUTS ---
     onKeyDown(event) {
         if (!this.canDrive && ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(event.code)) return;
         switch (event.code) {
@@ -600,7 +717,6 @@ class CarControls {
             case 'Space': this.keys.space = true; break; 
         }
     }
-
     onKeyUp(event) {
         switch (event.code) {
             case 'KeyW': case 'ArrowUp': this.keys.forward = false; break;
@@ -611,38 +727,63 @@ class CarControls {
         }
     }
 
-    // --- VISUAL DEBUG SYNC ---
-    updateDebugVisuals(suspensionOrigin, wallOrigin, wallDir) {
-        if (!this.debugMode) return;
-        if (!this.arrowSuspension || !this.arrowWall || !this.mindSphere) return;
-
-        this.arrowSuspension.position.copy(suspensionOrigin);
-        this.arrowSuspension.setDirection(new THREE.Vector3(0, -1, 0));
-
-        this.arrowWall.position.copy(wallOrigin);
-        this.arrowWall.setDirection(wallDir);
-
-        // Snap Mind Sphere to the origin of the wall ray
-        // This shows exactly where the physics engine is "Standing"
-        this.mindSphere.position.copy(wallOrigin);
+    // --- PARTICLE LOGIC ---
+    spawnSmoke(pos) {
+        const p = this.smokeParticles.find(p => p.life <= 0);
+        if (p) {
+            p.mesh.visible = true;
+            p.mesh.position.copy(pos);
+            p.mesh.position.x += (Math.random() - 0.5) * 1.5; 
+            p.mesh.position.z += (Math.random() - 0.5) * 1.5;
+            p.mesh.position.y += 0.5; 
+            p.mesh.scale.set(4, 4, 4);
+            p.mesh.material.opacity = 0.9;
+            p.life = 1.0; 
+        }
+    }
+    updateSmoke(deltaTime) {
+        this.smokeParticles.forEach(p => {
+            if (p.life > 0) {
+                p.life -= deltaTime;
+                p.mesh.position.y += deltaTime * 3.0; 
+                const scale = 4 + (1.0 - p.life) * 8.0; 
+                p.mesh.scale.set(scale, scale, scale);
+                p.mesh.material.opacity = p.life * 0.9; 
+                if (p.life <= 0) p.mesh.visible = false;
+            }
+        });
     }
 
-    // --- THE FIX: PURE WORLD SPACE COLLISION ---
+    updateDebugVisuals(suspensionOrigin, wallOrigin, wallDir) {
+        if (!this.debugMode) return;
+        if (this.arrowSuspension) {
+            this.arrowSuspension.position.copy(suspensionOrigin);
+            this.arrowSuspension.setDirection(new THREE.Vector3(0, -1, 0));
+        }
+        if (this.arrowWall) {
+            this.arrowWall.position.copy(wallOrigin);
+            this.arrowWall.setDirection(wallDir);
+        }
+        if (this.mindSphere) {
+            this.mindSphere.position.copy(wallOrigin);
+        }
+        if (this.boxHelper) {
+            this.boxHelper.update();
+        }
+    }
+
+    // --- WALL CHECK ---
     checkWallCollisions() {
         if (Math.abs(this.speed) < 1.0) return; 
 
-        // 1. Get ABSOLUTE WORLD Position & Rotation
-        // We do not trust '.position' or '.quaternion' (Local)
         const worldPos = new THREE.Vector3();
         const worldQuat = new THREE.Quaternion();
         this.model.getWorldPosition(worldPos);
         this.model.getWorldQuaternion(worldQuat);
 
-        // 2. Calculate Forward Direction using WORLD Rotation
         const forwardDir = new THREE.Vector3(0, 0, (this.speed > 0 ? -1 : 1));
         forwardDir.applyQuaternion(worldQuat).normalize();
         
-        // 3. Ray Origin
         const rayOrigin = worldPos.clone();
         rayOrigin.y += 2.0; 
 
@@ -664,8 +805,8 @@ class CarControls {
             const specialTolerances = {
                 "Object_40_1": 0.1, 
                 "Object_22": 1.0,
-                "Object_34_1": 0.2,
-                "Object_35_1": 0.2,
+                "Object_34_1": 1.0,
+                "Object_35_1": 1.0,
             };
             let activeTolerance = 0.5; 
             if (specialTolerances[hit.object.name] !== undefined) {
@@ -674,36 +815,72 @@ class CarControls {
 
             if (Math.abs(normal.y) > activeTolerance) return; 
 
-            // --- CRASH ---
             if (hit.distance < this.carLength) {
-                console.log(`💥 Hit Wall: ${hit.object.name}`);
-                this.speed = -this.speed * this.wallBounce;
-                
-                // Push car out
-                const pushOut = forwardDir.clone().multiplyScalar(-1.5);
-                this.model.position.add(pushOut);
-
-                // *** CRITICAL FIX ***
-                // Force the visual model to update its math instantly
-                // so the next frame's physics sees the new position
+                const impactAngle = forwardDir.dot(normal);
+                if (impactAngle < -0.8) {
+                    let bounceSpeed = -this.speed * this.wallBounce;
+                    if (bounceSpeed < -20) bounceSpeed = -20;
+                    if (bounceSpeed > 20) bounceSpeed = 20;
+                    this.speed = bounceSpeed;
+                    const pushOut = forwardDir.clone().multiplyScalar(-1.5);
+                    this.model.position.add(pushOut);
+                } else {
+                    const slideDir = forwardDir.clone().sub(normal.clone().multiplyScalar(impactAngle));
+                    slideDir.normalize();
+                    const lookTarget = this.model.position.clone().add(slideDir);
+                    this.model.lookAt(lookTarget);
+                    this.model.rotateY(Math.PI);
+                    this.speed *= 0.4; 
+                    const pushOut = normal.clone().multiplyScalar(3.0);
+                    this.model.position.add(pushOut);
+                }
                 this.model.updateMatrixWorld(true);
             }
         }
     }
 
+    // --- MAIN LOOP ---
     update(deltaTime) {
         if (this.canDrive) {
             if (this.keys.forward) this.speed += this.acceleration * deltaTime;
             else if (this.keys.backward) this.speed -= this.brakeStrength * deltaTime;
             else this.speed *= (1 - this.drag * deltaTime);
             
-            const isDrifting = this.keys.space && Math.abs(this.speed) > 10;
-            if (this.keys.left) this.steering = this.maxSteer * (isDrifting ? 1.5 : 1.0);
-            else if (this.keys.right) this.steering = -this.maxSteer * (isDrifting ? 1.5 : 1.0);
+            // Drift Logic
+            this.isDriftingState = this.keys.space && Math.abs(this.speed) > 10;
+            
+            if (this.keys.left) this.steering = this.maxSteer * (this.isDriftingState ? 3.0 : 1.0);
+            else if (this.keys.right) this.steering = -this.maxSteer * (this.isDriftingState ? 3.0 : 1.0);
             else this.steering = 0;
+
+            // Smoke
+            this.updateSmoke(deltaTime);
+
+            if (this.isDriftingState && this.isGrounded) {
+                this.smokeTimer += deltaTime;
+                if (this.smokeTimer > 0.05) { 
+                    this.smokeTimer = 0;
+                    const worldPos = new THREE.Vector3();
+                    this.model.getWorldPosition(worldPos);
+                    const worldQuat = new THREE.Quaternion();
+                    this.model.getWorldQuaternion(worldQuat);
+
+                    const offsetL = new THREE.Vector3(-1.5, 0, 2.5); 
+                    offsetL.applyQuaternion(worldQuat);
+                    offsetL.add(worldPos);
+                    this.spawnSmoke(offsetL);
+
+                    const offsetR = new THREE.Vector3(1.5, 0, 2.5); 
+                    offsetR.applyQuaternion(worldQuat);
+                    offsetR.add(worldPos);
+                    this.spawnSmoke(offsetR);
+                }
+            }
         } else {
             this.speed *= (1 - this.drag * deltaTime);
             this.steering = 0;
+            this.isDriftingState = false;
+            this.updateSmoke(deltaTime);
         }
 
         this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed, this.maxSpeed);
@@ -712,10 +889,8 @@ class CarControls {
             this.model.rotateY(this.steering * (this.speed > 0 ? 1 : -1));
         }
         
-        // Update Matrix BEFORE reading it for vectors
         this.model.updateMatrixWorld(true);
 
-        // --- PREPARE DATA (WORLD SPACE) ---
         const worldPos = new THREE.Vector3();
         const worldQuat = new THREE.Quaternion();
         this.model.getWorldPosition(worldPos);
@@ -729,11 +904,12 @@ class CarControls {
         const suspRayOrigin = worldPos.clone();
         suspRayOrigin.y += 5.0; 
 
-        // Physics Checks
         this.checkWallCollisions();
 
-        // Movement
-        const carFacingDir = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat); // Changed to worldQuat
+        const finalWorldQuat = new THREE.Quaternion();
+        this.model.getWorldQuaternion(finalWorldQuat);
+        const carFacingDir = new THREE.Vector3(0, 0, -1).applyQuaternion(finalWorldQuat);
+        
         const grip = (this.keys.space && Math.abs(this.speed) > 10) ? 0.05 : 0.8; 
         this.moveDirection.lerp(carFacingDir, grip).normalize();
         if (Math.abs(this.speed) < 5) this.moveDirection.copy(carFacingDir);
@@ -741,7 +917,7 @@ class CarControls {
         this.velocity.x = this.moveDirection.x * this.speed;
         this.velocity.z = this.moveDirection.z * this.speed;
         
-        // Ground Physics
+        // --- GROUND PHYSICS ---
         let rayOrigin = suspRayOrigin.clone();
         this.groundRaycaster.set(rayOrigin, new THREE.Vector3(0, -1, 0));
         this.groundRaycaster.far = 15.0; 
@@ -773,7 +949,9 @@ class CarControls {
                     const targetY = groundHit.point.y + this.rideHeight;
                     const distToTarget = Math.abs(targetY - this.model.position.y);
                     
-                    if (distToTarget < 15.0) {
+                    const snapDistance = 2.0; 
+
+                    if (distToTarget < snapDistance) {
                         isRayHittingSomething = true;
                         this.isGrounded = true;
                         this.groundMemory = this.memoryDuration;
@@ -783,8 +961,7 @@ class CarControls {
                         this.model.position.y = THREE.MathUtils.lerp(this.model.position.y, targetY, 0.5);
 
                         if (angle < 1.0) {
-                            // Alignment Logic
-                            const currentLook = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat); // World Quat
+                            const currentLook = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat);
                             const project = currentLook.clone().sub(groundNormal.clone().multiplyScalar(currentLook.dot(groundNormal))).normalize();
                             const targetRot = new THREE.Matrix4().lookAt(new THREE.Vector3(), project, groundNormal);
                             const targetQuat = new THREE.Quaternion().setFromRotationMatrix(targetRot);
@@ -818,9 +995,10 @@ class CarControls {
         }
 
         this.model.position.addScaledVector(this.velocity, deltaTime);
+        
+        // KEEPING DEATH PLANE AT -10 AS REQUESTED
         if(this.model.position.y < -10) this.hardRespawn();
 
-        // Stabilizer
         if (this.isGrounded) {
              const euler = new THREE.Euler().setFromQuaternion(this.model.quaternion, 'YXZ');
              euler.x *= 0.9; 
@@ -836,47 +1014,6 @@ class CarControls {
         if (typeof uiPosY !== 'undefined') uiPosY.innerText = worldPos.y.toFixed(1);
         if (typeof uiPosZ !== 'undefined') uiPosZ.innerText = worldPos.z.toFixed(1);
     }
-
-    
-    updateEngineAudio(forceIdle = false) {
-        if (!this.idleSound || !this.accelerationSound) return;
-        if (!this.idleSound.buffer || !this.accelerationSound.buffer) return;
-        const moving = Math.abs(this.speed) > this.engineSoundThreshold;
-        if (forceIdle || !moving) {
-            if (this.accelerationSound.isPlaying) this.accelerationSound.stop();
-            if (!this.idleSound.isPlaying) this.idleSound.play();
-        } else {
-            if (this.idleSound.isPlaying) this.idleSound.stop();
-            if (!this.accelerationSound.isPlaying) this.accelerationSound.play();
-        }
-    }
-
-  // --- SAFE DEBUG UPDATE ---
-  updateDebugVisuals(suspensionOrigin, wallOrigin, wallDir) {
-    // 1. If debug is off, do nothing
-    if (!this.debugMode) return;
-
-    // 2. Safe Checks: Only update things if they actually exist
-    if (this.arrowSuspension) {
-        this.arrowSuspension.position.copy(suspensionOrigin);
-        this.arrowSuspension.setDirection(new THREE.Vector3(0, -1, 0));
-    }
-
-    if (this.arrowWall) {
-        this.arrowWall.position.copy(wallOrigin);
-        this.arrowWall.setDirection(wallDir);
-    }
-
-    if (this.mindSphere) {
-        this.mindSphere.position.copy(wallOrigin);
-    }
-
-    // 3. THE CRASH FIX: Check if boxHelper exists before updating
-    if (this.boxHelper) {
-        this.boxHelper.update();
-    }
-}
-    
 }
 // --- Loaders ---
 export function levelOneBackground() {
@@ -961,7 +1098,7 @@ loader.load(
         
         addCarHeadlights(model);
 
-        carController = new CarControls(carModel, idleSound, accelerationSound);
+        carController = new CarControls(carModel, idleSound, accelerationSound, driftSound);
         tryAttachAudio();
 
         // Start Clock immediately (No Menu blocking)
@@ -1044,7 +1181,7 @@ function animate() {
     // If the canvas has a DIFFERENT ID than mine, it means a NEW loop has started.
     // I am the old ghost. I must stop.
     if (window.currentLoopId && window.currentLoopId !== myLoopId) {
-        // console.log("👻 Ghost Loop detected and stopped.");
+        // console.log(" Ghost Loop detected and stopped.");
         return; // STOP! Do not request new frame.
     }
     
