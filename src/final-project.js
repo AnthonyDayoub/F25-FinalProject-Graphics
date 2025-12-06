@@ -5,6 +5,34 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
+// --- CONFIGURATION CONSTANTS ---
+const ENGINE_CLASSES = {
+    '50cc': { maxSpeed: 80, accel: 30, brake: 60, steer: 0.004, gravity: 150 },
+    '100cc': { maxSpeed: 100, accel: 40, brake: 55, steer: 0.0045, gravity: 170 },
+    '150cc': { maxSpeed: 120, accel: 45, brake: 50, steer: 0.005, gravity: 180 }, // Original
+    '200cc': { maxSpeed: 180, accel: 80, brake: 50, steer: 0.005, gravity: 200 } // Hard mode
+};
+
+const CAR_MODELS = {
+    'cyber': { 
+        name: 'Cyber Interceptor', 
+        path: 'cyberpunk_car/scene.gltf', // Your existing file
+        scale: 0.01 
+    },
+    'drifter': { 
+        name: 'Neon Drifter', 
+        path: 'cyberpunk_car/scene.gltf', // PLACEHOLDER: Use same file for now, change path when you get a new model
+        scale: 0.01 
+    }
+};
+
+let GAME_STATE = {
+    mode: 'traditional', // 'traditional' or 'endless'
+    engine: '150cc',
+    car: 'cyber',
+    isPlaying: false
+};
+
 // --- ANTI-GHOST SYSTEM ---
 window.gameLoopId = null;
 
@@ -350,59 +378,59 @@ addSafetyNet();
 
 
 
-// --- CLASS: Time Trial Manager (High Performance / Rolling Start) ---
+// --- CLASS: Time Trial Manager (High-Precision Timestamp Version) ---
+// --- CLASS: Time Trial Manager (Debounced & Safe) ---
 class TimeTrialManager {
     constructor(uiCurrent, uiBest, uiLap) {
         this.uiCurrent = uiCurrent;
         this.uiBest = uiBest;
         this.uiLap = uiLap;
+        this.lapTimes = [];
         
         this.lap = 1;
-        this.startTime = 0;
         this.bestTime = Infinity;
+        
+        // TIMING VARIABLES
+        this.lapStartTime = 0; 
+        this.totalStartTime = 0; 
+        this.currentLapDuration = 0;
         
         this.isRunning = false;
         this.isWarmup = true; 
 
-        // --- PERFORMANCE OPTIMIZATION VARS ---
+        // SAFETY: Minimum time (seconds) a lap must take to count.
+        // This prevents the "Double Trigger" bug.
+        this.minLapTime = 5.0; 
+
+        // Performance & Checkpoints
         this.lastUITime = 0;   
-        this.uiUpdateRate = 0.065; // Update UI every ~65ms (approx 15fps)
-        this.workVec = new THREE.Vector3(); // Reusable vector (No Garbage Collection)
-        this.workQuat = new THREE.Quaternion(); // Reusable quaternion
+        this.uiUpdateRate = 65; // ms
+        this.workVec = new THREE.Vector3(); 
+        this.workQuat = new THREE.Quaternion(); 
         this.yAxis = new THREE.Vector3(0, 1, 0);
 
-        // --- CHECKPOINT CONFIGURATION ---
+        // Checkpoints Config
         this.checkpoints = [
-            // Checkpoint 1 (Index 0)
             { pos: new THREE.Vector3(370, 25, -130), rot: 0, radius: 20, passed: false }, 
-            
-            // Checkpoint 2 (Index 1)
             { pos: new THREE.Vector3(80, 47, 615), rot: 1.5, radius: 35, passed: false },
-
-            // FINISH LINE (Index 2)
             { pos: new THREE.Vector3(4, 10, 80), rot: 0, radius: 15, passed: false, isFinish: true } 
         ];
         
         this.nextCheckpointIndex = 0;
         this.debugMeshes = [];
 
-        // --- CREATE WALL VISUALS ---
+        // Create Checkpoint Visuals
         this.checkpoints.forEach((cp) => {
             const geometry = new THREE.BoxGeometry(cp.radius * 3.0, 25, 1);
             const material = new THREE.MeshBasicMaterial({ 
                 color: cp.isFinish ? 0x00ff00 : 0x00ffff, 
-                transparent: true,
-                opacity: 0.25,      
-                side: THREE.DoubleSide,
-                depthWrite: false,  
-                blending: THREE.AdditiveBlending 
+                transparent: true, opacity: 0.25, side: THREE.DoubleSide, 
+                depthWrite: false, blending: THREE.AdditiveBlending 
             });
-            
             const mesh = new THREE.Mesh(geometry, material);
             mesh.position.copy(cp.pos);
             mesh.position.y += 10; 
             mesh.rotation.y = cp.rot; 
-            
             scene.add(mesh);
             this.debugMeshes.push(mesh);
         });
@@ -411,13 +439,20 @@ class TimeTrialManager {
     start() {
         this.isWarmup = true;
         this.isRunning = false;
+        this.lapTimes = [];
         
-        this.uiCurrent.innerText = "WARMUP";
-        this.uiCurrent.style.color = '#ffaa00'; 
+        if (this.uiCurrent) {
+            this.uiCurrent.innerText = "WARMUP";
+            this.uiCurrent.style.color = '#ffaa00'; 
+        }
+
+        if (GAME_STATE.mode === 'traditional') {
+            document.getElementById('max-laps').innerText = "/ 3";
+        } else {
+            document.getElementById('max-laps').innerText = "";
+        }
         
-        // Start by looking for Finish Line (Index 2)
-        this.nextCheckpointIndex = 2; 
-        
+        this.nextCheckpointIndex = 2; // Look for finish line first
         this.lap = 1;
         this.resetCheckpointsVisuals();
     }
@@ -425,8 +460,9 @@ class TimeTrialManager {
     fullReset() {
         this.lap = 1;
         this.bestTime = Infinity;
-        this.uiBest.innerText = "--:--.--";
-        this.uiLap.innerText = this.lap;
+        this.lapTimes = [];
+        if (this.uiBest) this.uiBest.innerText = "--:--.--";
+        if (this.uiLap) this.uiLap.innerText = this.lap;
         this.start(); 
     }
 
@@ -440,34 +476,32 @@ class TimeTrialManager {
     }
 
     update(carPosition) {
-        const now = clock.getElapsedTime();
+        const now = performance.now();
 
-        // --- OPTIMIZATION 1: Throttle UI Updates ---
-        // Only update text if enough time has passed (saves massive CPU)
-        if (this.isRunning && (now - this.lastUITime > this.uiUpdateRate)) {
-            const currentTime = now - this.startTime;
-            this.uiCurrent.innerText = formatTime(currentTime);
-            this.lastUITime = now;
+        // Update UI Timer
+        if (this.isRunning) {
+            this.currentLapDuration = (now - this.lapStartTime) / 1000.0;
+            
+            if (now - this.lastUITime > this.uiUpdateRate) {
+                if (this.uiCurrent) this.uiCurrent.innerText = formatTime(this.currentLapDuration);
+                this.lastUITime = now;
+            }
         }
 
         const targetCP = this.checkpoints[this.nextCheckpointIndex];
         const targetMesh = this.debugMeshes[this.nextCheckpointIndex];
 
-        // --- OPTIMIZATION 2: Memory Pooling (No 'new' keywords) ---
-        // 1. Get vector from Checkpoint -> Car
+        // Collision Logic
         this.workVec.copy(carPosition).sub(targetCP.pos);
-        
-        // 2. Rotate vector to match gate
         this.workQuat.setFromAxisAngle(this.yAxis, -targetCP.rot); 
         this.workVec.applyQuaternion(this.workQuat);
 
         const gateHalfWidth = (targetCP.radius * 3.0) / 2.0; 
         const gateThickness = 6.0; 
 
-        // 3. Check collision
         if (Math.abs(this.workVec.x) < gateHalfWidth && Math.abs(this.workVec.z) < gateThickness) {
             
-            // Visual feedback (Check if already visible to avoid unnecessary draw calls)
+            // Visual feedback
             if (targetMesh.material.opacity < 0.05) {
                 targetMesh.material.color.setHex(0x333333);
                 targetMesh.material.opacity = 0.1;
@@ -475,53 +509,101 @@ class TimeTrialManager {
 
             if (targetCP.isFinish) {
                 if (this.isWarmup) {
-                    // --- RACE START ---
+                    // --- WARMUP END ---
+                    console.log("WARMUP COMPLETE");
                     this.isWarmup = false;
                     this.isRunning = true;
-                    this.startTime = now; // Sync exact time
-                    this.uiCurrent.style.color = '#00ffcc';
+                    
+                    this.lapTimes = [];
+                    const startT = performance.now();
+                    this.totalStartTime = startT;
+                    this.lapStartTime = startT; // Start Lap 1 Timer
+                    
+                    if(this.uiCurrent) this.uiCurrent.style.color = '#00ffcc';
                     
                     this.nextCheckpointIndex = 0;
                     this.resetCheckpointsVisuals();
                 } else {
                     // --- LAP FINISH ---
-                    // Force a UI update immediately for accuracy
-                    const finalTime = now - this.startTime;
-                    this.uiCurrent.innerText = formatTime(finalTime);
-                    this.completeLap(finalTime);
+                    // CHECK: Has it been at least 5 seconds?
+                    const potentialDuration = (performance.now() - this.lapStartTime) / 1000.0;
+
+                    if (potentialDuration > this.minLapTime) {
+                        const lapEndT = performance.now();
+                        const duration = (lapEndT - this.lapStartTime) / 1000.0;
+                        
+                        // Reset timer for NEXT lap
+                        this.lapStartTime = lapEndT;
+                        this.completeLap(duration);
+                    }
                 }
             } else {
-                // --- CHECKPOINT ---
+                // Normal Checkpoint
                 this.nextCheckpointIndex++;
             }
-        } else if (targetMesh.material.opacity === 0) {
-            // Only set this if it's not already set (Performance)
+        } 
+        else if (targetMesh.material.opacity === 0) {
             targetMesh.material.color.setHex(0xffff00);
             targetMesh.material.opacity = 0.0; 
         }
     }
 
-    completeLap(finalTime) {
-        if (finalTime < this.bestTime) {
-            this.bestTime = finalTime;
-            this.uiBest.innerText = formatTime(this.bestTime);
-            this.uiCurrent.style.color = '#00ff00';
-            // Use non-blocking timeout for style reset
-            setTimeout(() => { 
-                if(this.uiCurrent) this.uiCurrent.style.color = '#00ffcc'; 
-            }, 1000);
+    completeLap(duration) {
+        this.lapTimes.push(duration);
+        console.log(`Lap ${this.lap} Finished: ${duration.toFixed(2)}s`);
+
+        if (duration < this.bestTime) {
+            this.bestTime = duration;
+            if (this.uiBest) this.uiBest.innerText = formatTime(this.bestTime);
+            if (this.uiCurrent) {
+                this.uiCurrent.style.color = '#00ff00';
+                setTimeout(() => { if(this.uiCurrent) this.uiCurrent.style.color = '#00ffcc'; }, 1000);
+            }
+        }
+
+        // Check for Race Finish (Traditional Mode)
+        if (GAME_STATE.mode === 'traditional' && this.lap >= 3) {
+            this.endGame();
+            return;
         }
 
         this.lap++;
-        this.uiLap.innerText = this.lap;
-        this.startTime = clock.getElapsedTime();
+        if (this.uiLap) this.uiLap.innerText = this.lap;
+        
         this.nextCheckpointIndex = 0;
         this.resetCheckpointsVisuals();
     }
-}
-const timeTrial = new TimeTrialManager(uiTimeCurrent, uiTimeBest, uiLapCount);
 
-function createSmokeTexture() {
+    endGame() {
+        if (carController) carController.canDrive = false;
+        this.isRunning = false;
+
+        let lapsToCount = this.lapTimes;
+        if (GAME_STATE.mode === 'traditional') {
+             // Ensure we only show the last 3 valid laps
+             lapsToCount = this.lapTimes.slice(-3);
+        }
+
+        const totalTime = lapsToCount.reduce((a, b) => a + b, 0);
+
+        const uiContainer = document.getElementById('ui-container');
+        const resultsScreen = document.getElementById('results-screen');
+        
+        if (uiContainer) uiContainer.classList.add('hidden');
+        if (resultsScreen) resultsScreen.classList.remove('hidden');
+        
+        const l1 = document.getElementById('res-lap1');
+        const l2 = document.getElementById('res-lap2');
+        const l3 = document.getElementById('res-lap3');
+        const lTotal = document.getElementById('res-total');
+
+        if (l1) l1.innerText = formatTime(lapsToCount[0] || 0);
+        if (l2) l2.innerText = formatTime(lapsToCount[1] || 0);
+        if (l3) l3.innerText = formatTime(lapsToCount[2] || 0);
+        if (lTotal) lTotal.innerText = formatTime(totalTime);
+    }
+}
+    const timeTrial = new TimeTrialManager(uiTimeCurrent, uiTimeBest, uiLapCount);function createSmokeTexture() {
     const canvas = document.createElement('canvas');
     canvas.width = 64;
     canvas.height = 64;
@@ -543,15 +625,21 @@ function createSmokeTexture() {
 }
 
 class CarControls {
-    constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef) {
+    // UPDATED: Added 'physicsStats' to the arguments
+    constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef, physicsStats) {
         this.model = model;
         
-        // --- 1. TUNED CAR STATS ---
-        this.maxSpeed = 120; 
-        this.acceleration = 45;
-        this.brakeStrength = 50;
-        this.maxSteer = 0.005; 
-        this.gravity = 180;
+        // --- 1. DYNAMIC CAR STATS ---
+        // We now use the stats passed from the Menu (physicsStats)
+        // If physicsStats is missing (safety check), we fall back to 150cc values
+        const stats = physicsStats || { maxSpeed: 120, accel: 45, brake: 50, steer: 0.005, gravity: 180 };
+
+        this.maxSpeed = stats.maxSpeed; 
+        this.acceleration = stats.accel;
+        this.brakeStrength = stats.brake;
+        this.maxSteer = stats.steer; 
+        this.gravity = stats.gravity;
+        
         this.drag = 0.5;
 
         // --- 2. PHYSICS CONSTANTS ---
@@ -1035,9 +1123,7 @@ class CarControls {
         this.updateDebugVisuals(suspRayOrigin, wallRayOrigin, forwardDir);
 
         if (typeof uiSpeed !== 'undefined') uiSpeed.innerText = Math.abs(this.speed).toFixed(1);
-        if (typeof uiPosX !== 'undefined') uiPosX.innerText = worldPos.x.toFixed(1);
-        if (typeof uiPosY !== 'undefined') uiPosY.innerText = worldPos.y.toFixed(1);
-        if (typeof uiPosZ !== 'undefined') uiPosZ.innerText = worldPos.z.toFixed(1);
+  
     }
 }
 // --- Loaders ---
@@ -1099,39 +1185,129 @@ export function levelOneBackground() {
     (error) => { console.error("MAP ERROR:", error); }
     );
 }
-// Load Car
-const loader = new GLTFLoader();
-loader.setPath('cyberpunk_car/');
+// --- MENU INTERACTION & HUD BUTTONS ---
 
-loader.load(
-    'scene.gltf',
-    function (gltf) {
-        console.log("Car model loaded");
-        const model = gltf.scene;
-        model.scale.set(0.01, 0.01, 0.01); 
-        model.position.set(0, 30, 90); 
-        
-        model.traverse(function (node) {
-            if (node.isMesh) node.castShadow = true;
+// 1. Force HUD Buttons to be Clickable
+// (Fixes the issue where the transparent UI layer blocked clicks)
+const hudButtons = document.querySelectorAll('.game-btn');
+hudButtons.forEach(btn => {
+    btn.style.pointerEvents = 'auto';
+});
+
+// Helper to handle button selection
+function setupMenuSelection(id, configKey) {
+    const container = document.getElementById(id);
+    if (!container) return;
+    const buttons = container.getElementsByClassName('menu-btn');
+    Array.from(buttons).forEach(btn => {
+        btn.addEventListener('click', () => {
+            // Remove 'selected' class from siblings
+            Array.from(buttons).forEach(b => b.classList.remove('selected'));
+            // Add to clicked
+            btn.classList.add('selected');
+            // Update Config
+            GAME_STATE[configKey] = btn.getAttribute('data-value');
+            console.log(`Updated ${configKey}:`, GAME_STATE[configKey]);
         });
+    });
+}
+
+// Initialize Menu Listeners
+setupMenuSelection('mode-select', 'mode');
+setupMenuSelection('engine-select', 'engine');
+setupMenuSelection('car-select', 'car');
+
+// START BUTTON
+const btnStart = document.getElementById('start-race-btn');
+if (btnStart) {
+    btnStart.addEventListener('click', () => {
+        document.getElementById('main-menu').classList.add('hidden');
+        document.getElementById('ui-container').classList.remove('hidden');
+        initGameSession();
+    });
+}
+
+// IN-GAME EXIT BUTTON
+const btnExitIngame = document.getElementById('menu-btn-ingame');
+if (btnExitIngame) {
+    btnExitIngame.addEventListener('click', () => {
+        location.reload(); 
+    });
+}
+
+// RESULTS SCREEN EXIT BUTTON
+const btnReturn = document.getElementById('return-menu-btn');
+if (btnReturn) {
+    btnReturn.addEventListener('click', () => {
+        location.reload(); 
+    });
+}
+
+// RESTART RACE BUTTON (Formerly Respawn)
+const btnRestartRace = document.getElementById('reset-btn');
+if (btnRestartRace) {
+    btnRestartRace.addEventListener('click', () => {
+        console.log("RESTARTING RACE...");
+
+        // 1. Reset Physics & Position
+        if (carController) {
+            carController.manualReset();
+            carController.speed = 0; // Stop dead so you don't fly off
+        }
+
+        // 2. Reset Timer, Laps, and Array History
+        if (typeof timeTrial !== 'undefined') {
+            timeTrial.fullReset(); 
+        }
+
+        // 3. Focus window so you can drive immediately
+        window.focus(); 
+    });
+}
+
+// --- GAME SESSION LOADER ---
+function initGameSession() {
+    const selectedCarConfig = CAR_MODELS[GAME_STATE.car];
+    const selectedEngineStats = ENGINE_CLASSES[GAME_STATE.engine];
+
+    console.log(`STARTING RACE: ${GAME_STATE.mode} | ${GAME_STATE.engine} | ${selectedCarConfig.name}`);
+
+    // Clean up old car if exists (though usually we reload page for clean reset)
+    if (carModel) {
+        scene.remove(carModel);
+    }
+
+    const loader = new GLTFLoader();
+    
+    // Load Selected Car
+    loader.load(selectedCarConfig.path, (gltf) => {
+        const model = gltf.scene;
+        model.scale.set(selectedCarConfig.scale, selectedCarConfig.scale, selectedCarConfig.scale);
+        model.position.set(0, 30, 90);
+        
+        model.traverse((node) => { if (node.isMesh) node.castShadow = true; });
 
         carModel = model;
-        scene.add(model); // Add car to scene
-        
-        // IMPORTANT: DO NOT ADD CAMERA TO MODEL HERE. 
-        // We leave the camera separate so animate() can move it smoothly.
-        
+        scene.add(model);
         addCarHeadlights(model);
 
-        carController = new CarControls(carModel, idleSound, accelerationSound, driftSound);
+        // PASS STATS TO CONTROLLER
+        carController = new CarControls(
+            carModel, 
+            idleSound, 
+            accelerationSound, 
+            driftSound, 
+            selectedEngineStats // <--- PASSING PHYSICS HERE
+        );
+        
         tryAttachAudio();
+        timeTrial.fullReset(); // Start the timer logic
+        window.focus();
 
-        // Start Clock immediately (No Menu blocking)
-        timeTrial.start();
-    },
-    null,
-    function (error) { console.error('Car load error:', error); }
-);
+    }, undefined, (err) => console.error(err));
+}
+
+
 // Reset Button
 btnReset.addEventListener('click', () => {
     if (carController) {
@@ -1175,7 +1351,7 @@ const trackerMat = new THREE.MeshBasicMaterial({
     transparent: true,
     opacity: 0.8
 });
-const uiTrackerSphere = new THREE.Mesh(trackerGeo, trackerMat);
+
 
 
 // Add a label to it so we don't get confused
@@ -1212,6 +1388,7 @@ function animate() {
 
     if (carController) {
         carController.update(deltaTime);
+        // UPDATED: No 'deltaTime' needed for time trial anymore
         if (typeof timeTrial !== 'undefined') timeTrial.update(carModel.position);
     }
 
@@ -1231,12 +1408,7 @@ function animate() {
         camera.lookAt(lookAtTarget);
     }
     
-    if (typeof uiTrackerSphere !== 'undefined') {
-        const ghostX = parseFloat(document.getElementById('pos-x').innerText);
-        const ghostY = parseFloat(document.getElementById('pos-y').innerText);
-        const ghostZ = parseFloat(document.getElementById('pos-z').innerText);
-        if (!isNaN(ghostX)) uiTrackerSphere.position.set(ghostX, ghostY, ghostZ);
-    }
+   
 
     renderer.render(scene, camera);
 }
@@ -1247,8 +1419,7 @@ window.addEventListener('resize', () => {
     composer.setSize(window.innerWidth, window.innerHeight);
 }, false);
 
-levelOneBackground();
-animate();
+
 
 // --- DEBUG TOOL: Collision Vision ---
 let debugGroup = null;
@@ -1328,3 +1499,6 @@ window.addEventListener('keydown', (event) => {
     if (event.repeat) return;
     if (event.code === 'KeyC') toggleCollisionDebug();
 });
+
+levelOneBackground();
+animate();

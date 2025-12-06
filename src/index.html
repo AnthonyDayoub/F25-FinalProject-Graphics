@@ -4,98 +4,177 @@
     <meta charset="UTF-8">
     <title>Neon Racer: Time Trial</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; }
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
         canvas { display: block; }
         
-        /* 🏎️ IN-GAME HUD */
+        /* --- UTILITY --- */
+        .hidden { display: none !important; }
+        
+        /* --- IN-GAME HUD --- */
         #ui-container {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: rgba(0, 5, 16, 0.85);
-            color: #00ffcc;
-            padding: 20px;
-            font-family: 'Courier New', Courier, monospace;
-            border-radius: 8px;
-            border: 1px solid #00ffcc;
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(0, 5, 16, 0.85); color: #00ffcc;
+            padding: 20px; border-radius: 8px; border: 1px solid #00ffcc;
             box-shadow: 0 0 15px rgba(0, 255, 204, 0.2);
-            pointer-events: auto;
-            user-select: none;
-            min-width: 220px;
-            z-index: 100;
+            pointer-events: none; /* Let clicks pass through to canvas if needed */
+            user-select: none; min-width: 220px; z-index: 10;
+        }
+        .data-row { margin-bottom: 8px; font-size: 16px; font-weight: bold; display: flex; justify-content: space-between; }
+        .sub-header { font-size: 12px; color: #ff0055; margin-top: 15px; margin-bottom: 5px; text-transform: uppercase; border-bottom: 1px solid #ff0055; }
+        
+        /* --- MAIN MENU SYSTEM --- */
+        #main-menu {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 100; color: #fff; backdrop-filter: blur(5px);
+        }
+
+        h1 { font-size: 4rem; color: #fff; text-shadow: 0 0 20px #00ffcc, 4px 4px 0px #ff0055; margin-bottom: 30px; font-style: italic; }
+        
+        .menu-section { margin-bottom: 25px; text-align: center; }
+        .menu-label { color: #00ffcc; font-size: 1.2rem; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 2px; }
+        
+        .btn-group { display: flex; gap: 15px; }
+        
+        .menu-btn {
+            background: transparent; border: 2px solid #555; color: #888;
+            padding: 10px 20px; font-size: 1rem; cursor: pointer;
+            font-family: inherit; transition: 0.2s; text-transform: uppercase;
+            min-width: 100px; skew: -10deg;
         }
         
-        /* Data Rows */
-        .data-row {
-            margin-bottom: 8px;
-            font-size: 16px;
-            font-weight: bold;
-            display: flex;
-            justify-content: space-between;
+        .menu-btn:hover { border-color: #fff; color: #fff; transform: scale(1.05); }
+        .menu-btn.selected {
+            border-color: #ff0055; background: rgba(255, 0, 85, 0.2);
+            color: #fff; box-shadow: 0 0 15px #ff0055;
         }
 
-        /* Headers */
-        .sub-header {
-            font-size: 12px;
-            color: #ff0055;
-            margin-top: 15px;
-            margin-bottom: 5px;
-            text-transform: uppercase;
-            border-bottom: 1px solid #ff0055;
-            padding-bottom: 2px;
+        #start-race-btn {
+            margin-top: 20px; padding: 15px 50px; font-size: 1.5rem;
+            background: #00ffcc; color: #000; border: none; font-weight: bold;
+            box-shadow: 0 0 20px #00ffcc; cursor: pointer;
         }
+        #start-race-btn:hover { background: #ccfffa; transform: scale(1.1); }
 
-        .debug-text { color: #888; font-size: 12px; font-weight: normal; }
-
-        /* Buttons */
-        .game-btn {
-            margin-top: 10px;
-            width: 100%;
-            padding: 12px;
-            cursor: pointer;
-            font-family: inherit;
-            font-weight: bold;
-            text-transform: uppercase;
-            border-radius: 4px;
-            border: none;
-            transition: all 0.2s;
-        }
-
-        #reset-btn {
-            background: #ff0055;
+        /* --- RESULTS SCREEN --- */
+        #results-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); z-index: 101;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
             color: white;
-            margin-bottom: 5px;
         }
-        #reset-btn:hover { background: #ff4477; box-shadow: 0 0 15px #ff0055; }
+        .result-row { font-size: 1.5rem; margin: 10px 0; width: 300px; display: flex; justify-content: space-between; border-bottom: 1px dashed #555; }
+        .total-time { font-size: 3rem; color: #00ffcc; text-shadow: 0 0 15px #00ffcc; margin: 20px 0; }
+        
+        /* --- UPDATED IN-GAME BUTTON STYLES --- */
 
-        #restart-btn {
-            background: transparent;
-            color: #ff3333;
-            border: 1px solid #ff3333;
-            font-size: 11px;
-        }
-        #restart-btn:hover { background: #ff3333; color: white; box-shadow: 0 0 10px #ff3333; }
+/* Base style for in-game HUD buttons */
+.game-btn {
+    width: 100%;
+    margin-top: 15px; /* Space out from telemetry */
+    padding: 12px 0;
+    cursor: pointer;
+    font-family: 'Courier New', Courier, monospace; /* Match HUD font */
+    font-weight: bold;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    background: transparent; /* Transparent background */
+    border: 2px solid; /* Border width defined here, color below */
+    transition: all 0.25s ease-in-out;
+    /* Ensure they are clickable over the container's pointer-events: none */
+    pointer-events: auto; 
+    /* Slight angled skew for futuristic look */
+    transform: skewX(-10deg);
+}
+
+/* Variant 1: Neon Magenta (Restart) */
+.btn-neon-magenta {
+    border-color: #ff0055;
+    color: #ff0055;
+    text-shadow: 0 0 8px #ff0055;
+    box-shadow: inset 0 0 10px rgba(255, 0, 85, 0.1);
+}
+.btn-neon-magenta:hover {
+    background: rgba(255, 0, 85, 0.2);
+    color: #fff;
+    box-shadow: 0 0 25px rgba(255, 0, 85, 0.8), inset 0 0 15px rgba(255, 0, 85, 0.4);
+    text-shadow: 0 0 10px #fff;
+    transform: skewX(-10deg) scale(1.05); /* Slight grow effect */
+}
+
+/* Variant 2: Neon Cyan (Exit) */
+.btn-neon-cyan {
+    border-color: #00ffcc;
+    color: #00ffcc;
+    text-shadow: 0 0 8px #00ffcc;
+    box-shadow: inset 0 0 10px rgba(0, 255, 204, 0.1);
+}
+.btn-neon-cyan:hover {
+    background: rgba(0, 255, 204, 0.2);
+    color: #fff;
+    box-shadow: 0 0 25px rgba(0, 255, 204, 0.8), inset 0 0 15px rgba(0, 255, 204, 0.4);
+    text-shadow: 0 0 10px #fff;
+    transform: skewX(-10deg) scale(1.05);
+}
 
     </style>
 </head>
 <body>
 
-    <div id="ui-container">
+    <div id="main-menu">
+        <h1>NEON RACER</h1>
+        
+        <div class="menu-section">
+            <div class="menu-label">Select Mode</div>
+            <div class="btn-group" id="mode-select">
+                <button class="menu-btn selected" data-value="traditional">Traditional (3 Laps)</button>
+                <button class="menu-btn" data-value="endless">Endless</button>
+            </div>
+        </div>
+
+        <div class="menu-section">
+            <div class="menu-label">Engine Class</div>
+            <div class="btn-group" id="engine-select">
+                <button class="menu-btn" data-value="50cc">50cc</button>
+                <button class="menu-btn" data-value="100cc">100cc</button>
+                <button class="menu-btn selected" data-value="150cc">150cc</button>
+                <button class="menu-btn" data-value="200cc">200cc</button>
+            </div>
+        </div>
+
+        <div class="menu-section">
+            <div class="menu-label">Select Car</div>
+            <div class="btn-group" id="car-select">
+                <button class="menu-btn selected" data-value="cyber">Cyber Interceptor</button>
+                <button class="menu-btn" data-value="drifter">Neon Drifter</button>
+            </div>
+        </div>
+
+        <button id="start-race-btn">START ENGINE</button>
+    </div>
+
+    <div id="results-screen" class="hidden">
+        <h1>RACE FINISHED</h1>
+        <div class="result-row"><span>Lap 1:</span> <span id="res-lap1">--:--</span></div>
+        <div class="result-row"><span>Lap 2:</span> <span id="res-lap2">--:--</span></div>
+        <div class="result-row"><span>Lap 3:</span> <span id="res-lap3">--:--</span></div>
+        <div class="total-time" id="res-total">00:00.00</div>
+        <button id="return-menu-btn" class="menu-btn" style="border-color:#00ffcc; color:#00ffcc">RETURN TO MENU</button>
+    </div>
+
+    <div id="ui-container" class="hidden">
         <div class="data-row">TIME: <span id="time-current">00:00.00</span></div>
         <div class="data-row" style="color:#ff00cc">BEST: <span id="time-best">--:--.--</span></div>
-        <div class="data-row">LAP: <span id="lap-count">1</span></div>
-        
+        <div class="data-row">LAP: <span id="lap-count">1</span> <span id="max-laps" style="font-size:0.8em; color:#666"></span></div>
         <div class="sub-header">Telemetry</div>
         <div class="data-row">SPEED: <span id="speed-display">0.0</span></div>
-        
-        <div class="sub-header">Debug Position</div>
-        <div class="data-row debug-text">X: <span id="pos-x">0</span></div>
-        <div class="data-row debug-text">Y: <span id="pos-y">0</span></div>
-        <div class="data-row debug-text">Z: <span id="pos-z">0</span></div>
-
         <div class="sub-header">Actions</div>
-        <button id="reset-btn" class="game-btn">RESPAWN CAR</button>
-        <button id="restart-btn" class="game-btn">RESET ALL RECORDS</button>
+
+        <button id="reset-btn" class="game-btn btn-neon-magenta">RESTART RACE</button>
+        
+        <button id="menu-btn-ingame" class="game-btn btn-neon-cyan">EXIT GAME</button>
     </div>
 
     <script type="importmap">
@@ -106,7 +185,6 @@
         }
     }
     </script>
-
     <script type="module" src="final-project.js"></script>
 </body>
 </html>
