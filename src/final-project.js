@@ -349,7 +349,8 @@ function addSafetyNet() {
 addSafetyNet();
 
 
-// --- CLASS: Time Trial Manager (Doorframe Logic) ---
+
+// --- CLASS: Time Trial Manager (High Performance / Rolling Start) ---
 class TimeTrialManager {
     constructor(uiCurrent, uiBest, uiLap) {
         this.uiCurrent = uiCurrent;
@@ -359,17 +360,26 @@ class TimeTrialManager {
         this.lap = 1;
         this.startTime = 0;
         this.bestTime = Infinity;
+        
         this.isRunning = false;
+        this.isWarmup = true; 
+
+        // --- PERFORMANCE OPTIMIZATION VARS ---
+        this.lastUITime = 0;   
+        this.uiUpdateRate = 0.065; // Update UI every ~65ms (approx 15fps)
+        this.workVec = new THREE.Vector3(); // Reusable vector (No Garbage Collection)
+        this.workQuat = new THREE.Quaternion(); // Reusable quaternion
+        this.yAxis = new THREE.Vector3(0, 1, 0);
 
         // --- CHECKPOINT CONFIGURATION ---
         this.checkpoints = [
-            // Checkpoint 1
+            // Checkpoint 1 (Index 0)
             { pos: new THREE.Vector3(370, 25, -130), rot: 0, radius: 20, passed: false }, 
             
-            // Checkpoint 2
+            // Checkpoint 2 (Index 1)
             { pos: new THREE.Vector3(80, 47, 615), rot: 1.5, radius: 35, passed: false },
 
-            // FINISH LINE
+            // FINISH LINE (Index 2)
             { pos: new THREE.Vector3(4, 10, 80), rot: 0, radius: 15, passed: false, isFinish: true } 
         ];
         
@@ -378,9 +388,7 @@ class TimeTrialManager {
 
         // --- CREATE WALL VISUALS ---
         this.checkpoints.forEach((cp) => {
-            // Visual Width is Radius * 3
             const geometry = new THREE.BoxGeometry(cp.radius * 3.0, 25, 1);
-            
             const material = new THREE.MeshBasicMaterial({ 
                 color: cp.isFinish ? 0x00ff00 : 0x00ffff, 
                 transparent: true,
@@ -401,82 +409,95 @@ class TimeTrialManager {
     }
 
     start() {
-        this.isRunning = true;
-        this.startTime = clock.getElapsedTime();
+        this.isWarmup = true;
+        this.isRunning = false;
+        
+        this.uiCurrent.innerText = "WARMUP";
+        this.uiCurrent.style.color = '#ffaa00'; 
+        
+        // Start by looking for Finish Line (Index 2)
+        this.nextCheckpointIndex = 2; 
+        
         this.lap = 1;
-        this.resetCheckpoints();
+        this.resetCheckpointsVisuals();
     }
     
-    // Helper to completely reset the game state
     fullReset() {
         this.lap = 1;
         this.bestTime = Infinity;
-        this.startTime = clock.getElapsedTime();
         this.uiBest.innerText = "--:--.--";
         this.uiLap.innerText = this.lap;
-        this.uiCurrent.style.color = '#00ffcc';
-        this.resetCheckpoints();
+        this.start(); 
     }
 
-    resetCheckpoints() {
+    resetCheckpointsVisuals() {
         this.checkpoints.forEach(cp => cp.passed = false);
-        this.nextCheckpointIndex = 0;
-        
         this.debugMeshes.forEach((m, idx) => {
             const isFin = this.checkpoints[idx].isFinish;
             m.material.color.setHex(isFin ? 0x00ff00 : 0x00ffff);
-            m.material.opacity = 0.25;
+            m.material.opacity = 0;
         });
     }
 
     update(carPosition) {
-        if (!this.isRunning) return;
+        const now = clock.getElapsedTime();
 
-        const currentTime = clock.getElapsedTime() - this.startTime;
-        this.uiCurrent.innerText = formatTime(currentTime);
+        // --- OPTIMIZATION 1: Throttle UI Updates ---
+        // Only update text if enough time has passed (saves massive CPU)
+        if (this.isRunning && (now - this.lastUITime > this.uiUpdateRate)) {
+            const currentTime = now - this.startTime;
+            this.uiCurrent.innerText = formatTime(currentTime);
+            this.lastUITime = now;
+        }
 
         const targetCP = this.checkpoints[this.nextCheckpointIndex];
         const targetMesh = this.debugMeshes[this.nextCheckpointIndex];
 
-        if(targetMesh) {
-            targetMesh.material.color.setHex(0xffff00);
-            targetMesh.material.opacity = 0.5;
-        }
-
-        // --- NEW DETECTION LOGIC: "The Doorframe" ---
+        // --- OPTIMIZATION 2: Memory Pooling (No 'new' keywords) ---
+        // 1. Get vector from Checkpoint -> Car
+        this.workVec.copy(carPosition).sub(targetCP.pos);
         
-        // 1. Calculate vector from Checkpoint -> Car
-        const carLocal = carPosition.clone().sub(targetCP.pos);
-        
-        // 2. Rotate this vector to match the gate's rotation
-        // This gives us:
-        // x = Distance left/right from center of gate
-        // z = Distance forward/back from face of gate
-        const rotation = new THREE.Quaternion();
-        rotation.setFromAxisAngle(new THREE.Vector3(0,1,0), -targetCP.rot); 
-        carLocal.applyQuaternion(rotation);
+        // 2. Rotate vector to match gate
+        this.workQuat.setFromAxisAngle(this.yAxis, -targetCP.rot); 
+        this.workVec.applyQuaternion(this.workQuat);
 
-        // 3. Define the Trigger Zone
-        // Width: Must be within the visual box (radius * 3 / 2)
         const gateHalfWidth = (targetCP.radius * 3.0) / 2.0; 
-        
-        // Depth: Must be within 6 units of the wall face (Front or Back)
-        // Note: 6.0 is thick enough to catch high speed cars, thin enough to not trigger early
         const gateThickness = 6.0; 
 
-        // 4. Check if inside the box
-        if (Math.abs(carLocal.x) < gateHalfWidth && Math.abs(carLocal.z) < gateThickness) {
-            console.log(`Checkpoint ${this.nextCheckpointIndex + 1} passed!`);
+        // 3. Check collision
+        if (Math.abs(this.workVec.x) < gateHalfWidth && Math.abs(this.workVec.z) < gateThickness) {
             
-            // Visual feedback
-            targetMesh.material.color.setHex(0x333333);
-            targetMesh.material.opacity = 0.1;
+            // Visual feedback (Check if already visible to avoid unnecessary draw calls)
+            if (targetMesh.material.opacity < 0.05) {
+                targetMesh.material.color.setHex(0x333333);
+                targetMesh.material.opacity = 0.1;
+            }
 
             if (targetCP.isFinish) {
-                this.completeLap(currentTime);
+                if (this.isWarmup) {
+                    // --- RACE START ---
+                    this.isWarmup = false;
+                    this.isRunning = true;
+                    this.startTime = now; // Sync exact time
+                    this.uiCurrent.style.color = '#00ffcc';
+                    
+                    this.nextCheckpointIndex = 0;
+                    this.resetCheckpointsVisuals();
+                } else {
+                    // --- LAP FINISH ---
+                    // Force a UI update immediately for accuracy
+                    const finalTime = now - this.startTime;
+                    this.uiCurrent.innerText = formatTime(finalTime);
+                    this.completeLap(finalTime);
+                }
             } else {
+                // --- CHECKPOINT ---
                 this.nextCheckpointIndex++;
             }
+        } else if (targetMesh.material.opacity === 0) {
+            // Only set this if it's not already set (Performance)
+            targetMesh.material.color.setHex(0xffff00);
+            targetMesh.material.opacity = 0.0; 
         }
     }
 
@@ -485,13 +506,17 @@ class TimeTrialManager {
             this.bestTime = finalTime;
             this.uiBest.innerText = formatTime(this.bestTime);
             this.uiCurrent.style.color = '#00ff00';
-            setTimeout(() => this.uiCurrent.style.color = '#00ffcc', 1000);
+            // Use non-blocking timeout for style reset
+            setTimeout(() => { 
+                if(this.uiCurrent) this.uiCurrent.style.color = '#00ffcc'; 
+            }, 1000);
         }
 
         this.lap++;
         this.uiLap.innerText = this.lap;
         this.startTime = clock.getElapsedTime();
-        this.resetCheckpoints();
+        this.nextCheckpointIndex = 0;
+        this.resetCheckpointsVisuals();
     }
 }
 const timeTrial = new TimeTrialManager(uiTimeCurrent, uiTimeBest, uiLapCount);
@@ -1167,31 +1192,23 @@ document.body.appendChild(trackerLabelDiv);
 
 
 // --- THE INVINCIBLE LOOP ---
+// --- THE INVINCIBLE LOOP (UPDATED) ---
 function animate() {
     const canvas = renderer.domElement;
     
-    // 1. Tag the Canvas with our new Loop ID
-    // If we haven't assigned an ID yet, generate a random one (like a fingerprint)
-    if (!canvas.dataset.loopId) {
-        canvas.dataset.loopId = Math.random().toString();
-    }
+    // Anti-Ghost System
+    if (!canvas.dataset.loopId) canvas.dataset.loopId = Math.random().toString();
     const myLoopId = canvas.dataset.loopId;
-
-    // 2. The Check
-    // If the canvas has a DIFFERENT ID than mine, it means a NEW loop has started.
-    // I am the old ghost. I must stop.
-    if (window.currentLoopId && window.currentLoopId !== myLoopId) {
-        // console.log(" Ghost Loop detected and stopped.");
-        return; // STOP! Do not request new frame.
-    }
-    
-    // Set the global "Current" ID to mine, so older loops know to quit
+    if (window.currentLoopId && window.currentLoopId !== myLoopId) return;
     window.currentLoopId = myLoopId;
 
     requestAnimationFrame(animate);
 
-    // --- GAME LOGIC ---
-    const deltaTime = clock.getDelta();
+    // --- LAG FIX: CLAMP DELTA TIME ---
+    // We cap the frame time at 0.05s. If the computer freezes for 1 second,
+    // the physics only calculates 0.05s of movement, preventing 'teleporting' or heavy friction spikes.
+    const rawDelta = clock.getDelta();
+    const deltaTime = Math.min(rawDelta, 0.05);
 
     if (carController) {
         carController.update(deltaTime);
@@ -1214,7 +1231,6 @@ function animate() {
         camera.lookAt(lookAtTarget);
     }
     
-    // UI Tracker (The Pink Sphere Logic)
     if (typeof uiTrackerSphere !== 'undefined') {
         const ghostX = parseFloat(document.getElementById('pos-x').innerText);
         const ghostY = parseFloat(document.getElementById('pos-y').innerText);
