@@ -7,22 +7,33 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 // --- CONFIGURATION CONSTANTS ---
 const ENGINE_CLASSES = {
-    '50cc': { maxSpeed: 80, accel: 30, brake: 60, steer: 0.004, gravity: 150 },
-    '100cc': { maxSpeed: 100, accel: 40, brake: 55, steer: 0.0045, gravity: 170 },
-    '150cc': { maxSpeed: 120, accel: 45, brake: 50, steer: 0.005, gravity: 180 }, // Original
-    '200cc': { maxSpeed: 180, accel: 80, brake: 50, steer: 0.005, gravity: 200 } // Hard mode
+    '50cc': { maxSpeed: 80, accel: 30, brake: 60, steer: 0.02, gravity: 150 },
+    '100cc': { maxSpeed: 100, accel: 40, brake: 55, steer: 0.02, gravity: 170 },
+    '150cc': { maxSpeed: 120, accel: 45, brake: 50, steer: 0.02, gravity: 180 }, // Original
+    '200cc': { maxSpeed: 180, accel: 80, brake: 50, steer: 0.02, gravity: 200 } // Hard mode
 };
 
 const CAR_MODELS = {
     'cyber': { 
         name: 'Cyber Interceptor', 
-        path: 'cyberpunk_car/scene.gltf', // Your existing file
-        scale: 0.01 
+        path: 'cyberpunk_car/scene.gltf', 
+        scale: 0.01,
+        rotation: 0,         // Default: No rotation needed
+        yOffset: -0.5       // FIX 2: Slight Y Offset to prevent sinking into ground
     },
-    'drifter': { 
-        name: 'Neon Drifter', 
-        path: 'cyberpunk_car/scene.gltf', // PLACEHOLDER: Use same file for now, change path when you get a new model
-        scale: 0.01 
+    'bmw': { 
+        name: 'BMW M4 GTS', 
+        path: '2016_bmw_m4_gts.glb',
+        scale: 100,          // Your scale
+        rotation: Math.PI,   // FIX 1: Rotate 180 degrees (3.14 radians)
+        yOffset: -0.5       // FIX 2: Slight Y Offset to prevent sinking into ground
+    },
+    'civic': { 
+        name: 'Honda Civic Type R', 
+        path: 'honda_civic_type_r.glb',
+        scale: 2,          // Your scale
+        rotation: Math.PI,   // FIX 1: Rotate 180 degrees (3.14 radians)
+        yOffset: 0.5     // FIX 2: Slight Y Offset to prevent sinking into ground
     }
 };
 
@@ -286,61 +297,90 @@ function styleMeshForNeon(child) {
     child.material = Array.isArray(child.material) ? styled : styled[0];
 }
 
-function addCarHeadlights(model) {
+// UPDATED: Now adds White Headlights AND Red Taillights
+function setupCarLighting(model) {
+    // 1. Calculate Local Bounds
     carBoundsHelper.setFromObject(model);
     carBoundsHelper.getSize(carSizeHelper);
     carBoundsHelper.getCenter(carCenterHelper);
+    
+    // Convert World Center to Local Center
+    const localCenter = new THREE.Vector3().copy(carCenterHelper).sub(model.position);
+    
+    // 2. COMMON CONFIG
+    const xOffset = carSizeHelper.x * 0.3; 
+    // Headlights sit slightly lower than roof, Taillights slightly higher than bumper
+    const yPos = localCenter.y + (carSizeHelper.y * 0.1); 
 
-    const frontZ = carBoundsHelper.min.z - carSizeHelper.z * 0.05;
-    const xOffset = carSizeHelper.x * 0.25 || 0.2;
-    const yPos = carCenterHelper.y + carSizeHelper.y * 0.15;
-    const reach = Math.max(200, carSizeHelper.z * 20);
-    const markerGeom = new THREE.SphereGeometry(0.4, 12, 12);
-    const markerMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+    // --- VISIBILITY FILL LIGHT (NEW) ---
+    // A soft light that hovers above the car so it's never too dark to see.
+    // Intensity: 3.0 (Bright enough to see paint, not bright enough to blind you)
+    // Distance: 25 (Small radius, so it doesn't light up the ground too much)
+    const fillLight = new THREE.PointLight(0xffffff,800.0, 20);
+    
+    // Position: Center X, 5 units UP, and slightly BACK (+Z) to light up the rear/roof 
+    fillLight.position.set(localCenter.x, yPos + 10.0, localCenter.z + 2.0);
+    fillLight.castShadow = false; // Don't cast shadows, just illuminate
+    model.add(fillLight);
 
-    const makeLight = (xSign) => {
-        const light = new THREE.SpotLight(0xffffff, 250, reach, Math.PI / 3, 0.2, 1.2);
+    // --- FRONT LIGHTS (White) ---
+    // Front is Negative Z. We push slightly further out.
+    const frontZ = localCenter.z - (carSizeHelper.z * 0.5) + 0.5; 
+    const frontReach = Math.max(300, carSizeHelper.z * 30);
+    const headBulbGeom = new THREE.SphereGeometry(0.001, 16, 16);
+    const headMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+    const makeHeadLight = (xSign) => {
+        const light = new THREE.SpotLight(0xffffff, 300, frontReach, Math.PI / 3, 0.3, 1.2);
         light.castShadow = false;
-        light.position.set(carCenterHelper.x + xSign * xOffset, yPos, frontZ);
-
+        light.position.set(localCenter.x + xSign * xOffset, yPos, frontZ);
+        
         const target = new THREE.Object3D();
-        target.position.set(carCenterHelper.x + xSign * xOffset * 0.6, yPos - carSizeHelper.y * 0.05, frontZ - carSizeHelper.z * 0.6);
+        target.position.set(localCenter.x + xSign * xOffset, yPos, frontZ - 100); // Point Forward (-Z)
+        
         model.add(target);
         light.target = target;
-
         model.add(light);
-
-        const marker = new THREE.Mesh(markerGeom, markerMat);
-        marker.position.copy(light.position);
-        marker.renderOrder = 10;
-        marker.scale.set(
-            model.scale.x === 0 ? 1 : 1 / model.scale.x,
-            model.scale.y === 0 ? 1 : 1 / model.scale.y,
-            model.scale.z === 0 ? 1 : 1 / model.scale.z
-        );
-        model.add(marker);
-        return light;
+        
+        const bulb = new THREE.Mesh(headBulbGeom, headMat);
+        bulb.position.copy(light.position);
+        bulb.renderOrder = 10;
+        model.add(bulb);
     };
 
-    makeLight(1);
-    makeLight(-1);
-}
+    // --- REAR LIGHTS (Red) ---
+    // Back is Positive Z. We push slightly further back (+0.5).
+    const backZ = localCenter.z + (carSizeHelper.z * 0.5) - 0.4;
+    // Less bright (100 vs 300), shorter reach, wider angle
+    const tailReach = 50; 
+    const tailBulbGeom = new THREE.BoxGeometry(0.001, 0.001, .001); // Rectangular look
+    const tailMat = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Red Color
 
-function addMeshToSector(mesh) {
-    const pos = mesh.position;
-    const keyX = Math.floor(pos.x / trackSectorSize);
-    const keyZ = Math.floor(pos.z / trackSectorSize);
-    const key = `${keyX}:${keyZ}`;
+    const makeTailLight = (xSign) => {
+        // Red SpotLight
+        const light = new THREE.SpotLight(0xff0000, 100, tailReach, Math.PI / 2, 0.5, 1);
+        light.castShadow = false;
+        light.position.set(localCenter.x + xSign * xOffset, yPos, backZ);
 
-    let sector = trackSectorMap.get(key);
-    if (!sector) {
-        sector = { key, meshes: [], anchor: null };
-        trackSectorMap.set(key, sector);
-        trackSectors.push(sector);
-    }
-    sector.meshes.push(mesh);
-    if (!sector.anchor) sector.anchor = mesh;
-    mesh.frustumCulled = true;
+        const target = new THREE.Object3D();
+        target.position.set(localCenter.x + xSign * xOffset, yPos, backZ + 50); // Point Backward (+Z)
+        
+        model.add(target);
+        light.target = target;
+        model.add(light);
+
+        // Red Lens Mesh
+        const lens = new THREE.Mesh(tailBulbGeom, tailMat);
+        lens.position.copy(light.position);
+        lens.renderOrder = 10;
+        model.add(lens);
+    };
+
+    // Spawn them
+    makeHeadLight(1);  // Left Front
+    makeHeadLight(-1); // Right Front
+    makeTailLight(1);  // Left Rear
+    makeTailLight(-1); // Right Rear
 }
 
 function updateSectorVisibility(carPos) {
@@ -962,8 +1002,8 @@ class CarControls {
             // Drift Logic
             this.isDriftingState = this.keys.space && Math.abs(this.speed) > 10;
             
-            if (this.keys.left) this.steering = this.maxSteer * (this.isDriftingState ? 3.0 : 1.0);
-            else if (this.keys.right) this.steering = -this.maxSteer * (this.isDriftingState ? 3.0 : 1.0);
+            if (this.keys.left) this.steering = this.maxSteer * (this.isDriftingState ? 2.0 : 1.0);
+            else if (this.keys.right) this.steering = -this.maxSteer * (this.isDriftingState ? 2.0 : 1.0);
             else this.steering = 0;
 
             // Smoke
@@ -1266,47 +1306,72 @@ if (btnRestartRace) {
 }
 
 // --- GAME SESSION LOADER ---
+// --- GAME SESSION LOADER (WRAPPER FIX) ---
 function initGameSession() {
     const selectedCarConfig = CAR_MODELS[GAME_STATE.car];
     const selectedEngineStats = ENGINE_CLASSES[GAME_STATE.engine];
 
     console.log(`STARTING RACE: ${GAME_STATE.mode} | ${GAME_STATE.engine} | ${selectedCarConfig.name}`);
 
-    // Clean up old car if exists (though usually we reload page for clean reset)
     if (carModel) {
         scene.remove(carModel);
+        carModel = null;
     }
 
     const loader = new GLTFLoader();
+
+    // DRACO Loader setup (Keep this if you have it)
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    loader.setDRACOLoader(dracoLoader);
     
-    // Load Selected Car
     loader.load(selectedCarConfig.path, (gltf) => {
-        const model = gltf.scene;
-        model.scale.set(selectedCarConfig.scale, selectedCarConfig.scale, selectedCarConfig.scale);
-        model.position.set(0, 30, 90);
+        // 1. CREATE THE WRAPPER (The "Physics Body")
+        const physicsGroup = new THREE.Group();
+        physicsGroup.position.set(0, 30, 90); // Set start position on the wrapper
+
+        // 2. SETUP THE VISUALS (The "Skin")
+        const visualModel = gltf.scene;
         
-        model.traverse((node) => { if (node.isMesh) node.castShadow = true; });
+        // Apply Scale to Visuals Only
+        visualModel.scale.set(selectedCarConfig.scale, selectedCarConfig.scale, selectedCarConfig.scale);
+        
+        // Apply Rotation to Visuals Only (Fixes backwards BMW)
+        if (selectedCarConfig.rotation) {
+            visualModel.rotation.y = selectedCarConfig.rotation;
+        }
 
-        carModel = model;
-        scene.add(model);
-        addCarHeadlights(model);
+        if (selectedCarConfig.yOffset) {
+            visualModel.position.y = selectedCarConfig.yOffset;
+        }
 
-        // PASS STATS TO CONTROLLER
+        // Enable Shadows
+        visualModel.traverse((node) => { if (node.isMesh) node.castShadow = true; });
+
+        // 3. COMBINE THEM
+        physicsGroup.add(visualModel);
+        carModel = physicsGroup; // The game controls the GROUP, not the model
+        scene.add(carModel);
+        
+       // 4. ADD LIGHTING (Headlights + Taillights)
+       setupCarLighting(carModel);
+
+        // 5. START PHYSICS
         carController = new CarControls(
             carModel, 
             idleSound, 
             accelerationSound, 
             driftSound, 
-            selectedEngineStats // <--- PASSING PHYSICS HERE
+            selectedEngineStats 
         );
         
         tryAttachAudio();
-        timeTrial.fullReset(); // Start the timer logic
+        
+        if (typeof timeTrial !== 'undefined') timeTrial.fullReset(); 
         window.focus();
 
     }, undefined, (err) => console.error(err));
 }
-
 
 // Reset Button
 btnReset.addEventListener('click', () => {

@@ -47,6 +47,8 @@ module.exports = {
             patterns: [
                 { from: path.resolve(__dirname, 'src/cyberpunk_car'), to: 'cyberpunk_car' },
                 { from: path.resolve(__dirname, 'src/moonview_highway.glb'), to: 'moonview_highway.glb' },
+                {from : path.resolve(__dirname, 'src/2016_bmw_m4_gts.glb'), to: '2016_bmw_m4_gts.glb' },
+                {from : path.resolve(__dirname, 'src/honda_civic_type_r.glb'), to: 'honda_civic_type_r.glb' },
             ],
         }),
     ],
