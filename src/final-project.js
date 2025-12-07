@@ -15,32 +15,47 @@ const ENGINE_CLASSES = {
 
 const CAR_MODELS = {
     'cyber': { 
-        name: 'Cyber Interceptor', 
-        path: 'cyberpunk_car/scene.gltf', 
-        scale: 0.02,
-        rotation: 0,         // Default: No rotation needed
-        yOffset: -0.5       // FIX 2: Slight Y Offset to prevent sinking into ground
+        name: 'Cyber Car', 
+        path: 'cyberpunk_car.glb', 
+        scale: 1,
+        rotation: Math.PI,         // Default: No rotation needed
+        zOffset: 0,
+        yOffset: -1,       // FIX 2: Slight Y Offset to prevent sinking into ground
+        wheelNames: ["Object_99", "Object_93"],
+        fixPivot: true
     },
     'bmw': { 
         name: 'BMW M4 GTS', 
         path: '2016_bmw_m4_gts.glb',
         scale: 200,          // Your scale
         rotation: Math.PI,   // FIX 1: Rotate 180 degrees (3.14 radians)
-        yOffset: -0.5       // FIX 2: Slight Y Offset to prevent sinking into ground
+        zOffset: 0,
+        yOffset: -0.5,       // FIX 2: Slight Y Offset to prevent sinking into ground
+        wheelNames: [ 'tire', 'carwheel' ],
+        fixPivot: true
+                                  
+        
     },
     'civic': { 
         name: 'Honda Civic Type R', 
-        path: 'honda_civic_type_r.glb',
-        scale: 3,          // Your scale
+        path: 'honda_civic.glb',
+        scale: 200,          // Your scale
         rotation: Math.PI,   // FIX 1: Rotate 180 degrees (3.14 radians)
-        yOffset: 1     // FIX 2: Slight Y Offset to prevent sinking into ground
+        zOffset: 0,
+        yOffset: -0.5,    // FIX 2: Slight Y Offset to prevent sinking into ground
+        wheelNames: ["308", "314", "361", "317", "448", "311", "343", "598", "334", "337", "634", "340", "356", "353", "691", "727", "347", "350", "327", "330", "324", "454", "321"],
+        fixPivot: false
+    
     },
-    'charger': { 
-        name: 'Dodge Charger', 
-        path: 'dodge_charger.glb',
+    'supra': { 
+        name: 'Toyota Supra', 
+        path: 'supra.glb',
         scale: 2,          // Your scale
         rotation: Math.PI,   
-        yOffset: -.5    // FIX 2: Slight Y Offset to prevent sinking into ground
+        zOffset: 0,
+        yOffset: -.5,    // FIX 2: Slight Y Offset to prevent sinking into ground
+        wheelNames: ["120", "149"],
+        fixPivot: true
     }
 };
 
@@ -673,8 +688,53 @@ class TimeTrialManager {
 
 class CarControls {
     // UPDATED: Added 'physicsStats' to the arguments
-    constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef, physicsStats) {
+    constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef, physicsStats, wheelKeywords=[], shouldFixPivot = false) {
         this.model = model;
+     
+        this.wheels = [];
+        const foundWheelMeshes = [];
+
+        if (wheelKeywords.length > 0) {
+            this.model.traverse((child) => {
+                if (child.isMesh) {
+                    const isWheel = wheelKeywords.some(keyword => {
+                        // 1. STRICT MATCH: If keyword starts with '=', check EXACT name
+                        if (keyword.startsWith('=')) {
+                            const exactName = keyword.substring(1); // Remove the '='
+                            return child.name === exactName;
+                        }
+                        
+                        // 2. STANDARD MATCH: Check if name *contains* keyword
+                        return child.name.toLowerCase().includes(keyword.toLowerCase());
+                    });
+
+                    if (isWheel) foundWheelMeshes.push(child);
+                }
+            });
+        }
+
+        foundWheelMeshes.forEach(mesh => {
+            if (shouldFixPivot) {
+                // --- A. THE FIX (For Civic) ---
+                // Create a new group at the wheel's center to act as a hinge
+                const box = new THREE.Box3().setFromObject(mesh);
+                const center = new THREE.Vector3();
+                box.getCenter(center);
+
+                const pivot = new THREE.Group();
+                mesh.parent.add(pivot);
+                pivot.position.copy(mesh.parent.worldToLocal(center.clone()));
+                
+                pivot.attach(mesh);
+                this.wheels.push(pivot);
+            } else {
+                // --- B. STANDARD (For BMW) ---
+                // Just grab the mesh directly. It works fine.
+                this.wheels.push(mesh);
+            }
+        });
+        
+        console.log(`Found and fixed pivots for ${this.wheels.length} wheel parts.`);
         
         // --- 1. DYNAMIC CAR STATS ---
         // We now use the stats passed from the Menu (physicsStats)
@@ -1170,6 +1230,16 @@ class CarControls {
         this.updateDebugVisuals(suspRayOrigin, wallRayOrigin, forwardDir);
 
         if (typeof uiSpeed !== 'undefined') uiSpeed.innerText = Math.abs(this.speed).toFixed(1);
+
+        // --- NEW: SPIN THE WHEELS ---
+        // Rotate wheels based on speed
+        if (this.wheels.length > 0) {
+            const spinAmount = this.speed * deltaTime * 0.5; // Adjust 0.5 to match wheel size
+            this.wheels.forEach(wheel => {
+                // Rotate on X axis (Standard for wheels)
+                wheel.rotateX(spinAmount);
+            });
+        }
   
     }
 }
@@ -1333,13 +1403,40 @@ function initGameSession() {
     loader.setDRACOLoader(dracoLoader);
     
     loader.load(selectedCarConfig.path, (gltf) => {
-        // 1. CREATE THE WRAPPER (The "Physics Body")
+        // 1. CREATE THE WRAPPER
         const physicsGroup = new THREE.Group();
-        physicsGroup.position.set(0, 30, 90); // Set start position on the wrapper
+        physicsGroup.position.set(0, 30, 90); 
 
-        // 2. SETUP THE VISUALS (The "Skin")
+        // 2. SETUP THE VISUALS
         const visualModel = gltf.scene;
+
+        // --- 🕶️ WINDOW TINT SHOP (The Fix) ---
+        visualModel.traverse((child) => {
+            if (child.isMesh) {
+                // Get the material (handle cases where a mesh has multiple materials)
+                const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+                materials.forEach(mat => {
+                    const name = mat.name.toLowerCase();
+         
+                });
+                
+                // Enable shadows while we are here
+                child.castShadow = true;
+            }
+        });
+        // -------------------------------------
+
+        // ... (The rest of your code: scaling, rotation, yOffset, combining, etc.)
         
+        // ---  PASTE THIS INSPECTOR CODE HERE ---
+        console.group(` INSPECTING: ${selectedCarConfig.name}`);
+        visualModel.traverse((child) => {
+            if (child.isMesh) {
+                console.log(` PART NAME: "${child.name}" | TYPE: ${child.type}`);
+            }
+        });
+
         // Apply Scale to Visuals Only
         visualModel.scale.set(selectedCarConfig.scale, selectedCarConfig.scale, selectedCarConfig.scale);
         
@@ -1350,6 +1447,10 @@ function initGameSession() {
 
         if (selectedCarConfig.yOffset) {
             visualModel.position.y = selectedCarConfig.yOffset;
+        }
+
+        if(selectedCarConfig.zOffset) {
+            visualModel.position.z = selectedCarConfig.zOffset;
         }
 
         // Enable Shadows
@@ -1363,13 +1464,17 @@ function initGameSession() {
        // 4. ADD LIGHTING (Headlights + Taillights)
        setupCarLighting(carModel);
 
+       carModel.updateMatrixWorld(true);
+
         // 5. START PHYSICS
         carController = new CarControls(
             carModel, 
             idleSound, 
             accelerationSound, 
             driftSound, 
-            selectedEngineStats 
+            selectedEngineStats,
+            selectedCarConfig.wheelNames,
+            selectedCarConfig.fixPivot
         );
         
         tryAttachAudio();
@@ -1440,7 +1545,6 @@ document.body.appendChild(trackerLabelDiv);
 
 
 // --- THE INVINCIBLE LOOP ---
-// --- THE INVINCIBLE LOOP (UPDATED) ---
 function animate() {
     const canvas = renderer.domElement;
     
