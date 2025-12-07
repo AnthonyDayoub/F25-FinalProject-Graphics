@@ -49,6 +49,7 @@ module.exports = {
                 { from: path.resolve(__dirname, 'src/moonview_highway.glb'), to: 'moonview_highway.glb' },
                 {from : path.resolve(__dirname, 'src/2016_bmw_m4_gts.glb'), to: '2016_bmw_m4_gts.glb' },
                 {from : path.resolve(__dirname, 'src/honda_civic_type_r.glb'), to: 'honda_civic_type_r.glb' },
+                {from : path.resolve(__dirname, 'src/dodge_charger.glb'), to: 'dodge_charger.glb' },
             ],
         }),
     ],

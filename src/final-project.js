@@ -17,23 +17,30 @@ const CAR_MODELS = {
     'cyber': { 
         name: 'Cyber Interceptor', 
         path: 'cyberpunk_car/scene.gltf', 
-        scale: 0.01,
+        scale: 0.02,
         rotation: 0,         // Default: No rotation needed
         yOffset: -0.5       // FIX 2: Slight Y Offset to prevent sinking into ground
     },
     'bmw': { 
         name: 'BMW M4 GTS', 
         path: '2016_bmw_m4_gts.glb',
-        scale: 100,          // Your scale
+        scale: 200,          // Your scale
         rotation: Math.PI,   // FIX 1: Rotate 180 degrees (3.14 radians)
         yOffset: -0.5       // FIX 2: Slight Y Offset to prevent sinking into ground
     },
     'civic': { 
         name: 'Honda Civic Type R', 
         path: 'honda_civic_type_r.glb',
-        scale: 2,          // Your scale
+        scale: 3,          // Your scale
         rotation: Math.PI,   // FIX 1: Rotate 180 degrees (3.14 radians)
-        yOffset: 0.5     // FIX 2: Slight Y Offset to prevent sinking into ground
+        yOffset: 1     // FIX 2: Slight Y Offset to prevent sinking into ground
+    },
+    'charger': { 
+        name: 'Dodge Charger', 
+        path: 'dodge_charger.glb',
+        scale: 2,          // Your scale
+        rotation: Math.PI,   
+        yOffset: -.5    // FIX 2: Slight Y Offset to prevent sinking into ground
     }
 };
 
