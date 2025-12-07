@@ -233,6 +233,7 @@ const pointerState = { dragging: false, pointerId: null, lastX: 0, lastY: 0 };
 
 // --- COLLISION GLOBAL ---
 const mapColliders = []; 
+const animatedObjects = [];
 const ghostColliders = [];
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -476,8 +477,58 @@ function updateSectorVisibility(carPos) {
     });
 }
 
-function forceAllSectorsVisible() {
-    trackSectors.forEach((sector) => sector.meshes.forEach(m => m.visible = true));
+// --- SPONSOR BILLBOARD (The "Real" Version) ---
+function createSponsorBillboard(position) {
+    const loader = new THREE.TextureLoader();
+    
+    loader.load('MVU_Logo.png', (texture) => {
+        
+        // 1. Create the Main Wrapper (Holds everything)
+        const wrapper = new THREE.Group();
+        wrapper.position.copy(position);
+        scene.add(wrapper);
+
+        // --- THE POLE (Stationary) ---
+        // Cylinder: Radius Top, Radius Bottom, Height, Segments
+        const poleGeo = new THREE.CylinderGeometry(1, 1, 45, 16);
+        const poleMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.5, metalness: 0.8 });
+        const pole = new THREE.Mesh(poleGeo, poleMat);
+        // Move pole down so the top is at (0,0,0) relative to wrapper
+        pole.position.y = -20; 
+        wrapper.add(pole);
+
+        // --- THE SPINNING SIGN (Rotates) ---
+        const signGroup = new THREE.Group();
+        wrapper.add(signGroup); // Add to wrapper
+        
+        // A. The Physical Box (Backing)
+        const boxGeo = new THREE.BoxGeometry(62, 22, 2); // Slightly bigger than image
+        const boxMat = new THREE.MeshStandardMaterial({ color: 0x111111 }); // Dark backing
+        const box = new THREE.Mesh(boxGeo, boxMat);
+        signGroup.add(box);
+
+        // B. The Image (Front)
+        const planeGeo = new THREE.PlaneGeometry(60, 20);
+        const planeMat = new THREE.MeshBasicMaterial({ 
+            map: texture,
+            side: THREE.DoubleSide, // Visible from back too?
+            transparent: true
+        });
+        const frontImage = new THREE.Mesh(planeGeo, planeMat);
+        frontImage.position.z = 1.1; // Push forward slightly to sit on box
+        signGroup.add(frontImage);
+
+        // C. The Image (Back - Optional, so it's not blank from behind)
+        const backImage = frontImage.clone();
+        backImage.rotation.y = Math.PI; // Flip it
+        backImage.position.z = -1.1; // Push backward
+        signGroup.add(backImage);
+
+        // --- ADD TO ROTATION LIST ---
+        animatedObjects.push(signGroup);
+        
+        console.log("Real Billboard Built at", position);
+    });
 }
 
 // --- Safety Net (Fix for falling through map) ---
@@ -1479,11 +1530,13 @@ if (btnRestartRace) {
 }
 
 // --- GAME SESSION LOADER ---
-// --- GAME SESSION LOADER (WRAPPER FIX) ---
 function initGameSession() {
     const selectedCarConfig = CAR_MODELS[GAME_STATE.car];
     const selectedEngineStats = ENGINE_CLASSES[GAME_STATE.engine];
     cameraMode = 0;
+    // Inside initGameSession...
+    // Use "P" key to find a good spot on a wall or turn!
+    createSponsorBillboard(new THREE.Vector3(330, 35, -470.8));
 
     console.log(`STARTING RACE: ${GAME_STATE.mode} | ${GAME_STATE.engine} | ${selectedCarConfig.name}`);
 
@@ -1669,6 +1722,14 @@ function animate() {
     // the physics only calculates 0.05s of movement, preventing 'teleporting' or heavy friction spikes.
     const rawDelta = clock.getDelta();
     const deltaTime = Math.min(rawDelta, 0.05);
+
+    // --- SPIN ANIMATED OBJECTS ---
+    if (animatedObjects.length > 0) {
+        animatedObjects.forEach(obj => {
+            // Rotate on Y axis (Spinning like a sign)
+            obj.rotation.y += 0.5 * deltaTime; 
+        });
+    }
 
     if (carController) {
         carController.update(deltaTime);
