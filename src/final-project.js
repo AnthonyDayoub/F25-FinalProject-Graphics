@@ -146,6 +146,13 @@ const idleSound = new THREE.PositionalAudio(listener);
 const accelerationSound = new THREE.PositionalAudio(listener);
 const driftSound = new THREE.PositionalAudio(listener); 
 
+// 2. MUSIC & SFX (Global / 2D) - NEW!
+const bgmNormal = new THREE.Audio(listener);
+const bgmFast   = new THREE.Audio(listener);
+const sfxFanfare = new THREE.Audio(listener);
+
+
+
 // CHANGE 2: Configure 3D Sound Settings
 // RefDistance: Sound is full volume within this distance (e.g., 10 units)
 // RolloffFactor: How fast it gets quiet as you move away
@@ -184,6 +191,26 @@ audioLoader.load('drift.mp3', (buffer) => {
     driftSound.setVolume(0);  
     tryAttachAudio();
 });
+
+// --- LOAD MUSIC (NEW) ---
+audioLoader.load('bgm.mp3', (buffer) => {
+    bgmNormal.setBuffer(buffer);
+    bgmNormal.setLoop(true);
+    bgmNormal.setVolume(0.4); // Background volume (lower than engine)
+});
+
+audioLoader.load('bgmfast.mp3', (buffer) => {
+    bgmFast.setBuffer(buffer);
+    bgmFast.setLoop(true);
+    bgmFast.setVolume(0.4);
+});
+
+audioLoader.load('fanfare.mp3', (buffer) => {
+    sfxFanfare.setBuffer(buffer);
+    sfxFanfare.setLoop(false); // Play once
+    sfxFanfare.setVolume(0.7); // Louder for victory!
+});
+
 // Camera follow helpers
 const chaseLerpFactor = 1.12;
 const carWorldPosition = new THREE.Vector3();
@@ -534,6 +561,13 @@ class TimeTrialManager {
         this.isWarmup = true;
         this.isRunning = false;
         this.lapTimes = [];
+
+        // --- MUSIC RESET ---
+        if (bgmNormal.isPlaying) bgmNormal.stop();
+        if (bgmFast.isPlaying) bgmFast.stop();
+        if (sfxFanfare.isPlaying) sfxFanfare.stop();
+
+        
         
         if (this.uiCurrent) {
             this.uiCurrent.innerText = "WARMUP";
@@ -541,7 +575,7 @@ class TimeTrialManager {
         }
 
         if (GAME_STATE.mode === 'traditional') {
-            document.getElementById('max-laps').innerText = "/ 3";
+            document.getElementById('max-laps').innerText = "/ 5";
         } else {
             document.getElementById('max-laps').innerText = "";
         }
@@ -574,10 +608,10 @@ class TimeTrialManager {
 
         // Update UI Timer
         if (this.isRunning) {
-            this.currentLapDuration = (now - this.lapStartTime) / 1000.0;
+            const totalRaceTime = (now - this.totalStartTime) / 1000.0;
             
             if (now - this.lastUITime > this.uiUpdateRate) {
-                if (this.uiCurrent) this.uiCurrent.innerText = formatTime(this.currentLapDuration);
+                if (this.uiCurrent) this.uiCurrent.innerText = formatTime(totalRaceTime);
                 this.lastUITime = now;
             }
         }
@@ -607,6 +641,10 @@ class TimeTrialManager {
                     console.log("WARMUP COMPLETE");
                     this.isWarmup = false;
                     this.isRunning = true;
+
+                    if (bgmNormal.buffer && !bgmNormal.isPlaying) {
+                        bgmNormal.play();
+                    }
                     
                     this.lapTimes = [];
                     const startT = performance.now();
@@ -629,6 +667,7 @@ class TimeTrialManager {
                         // Reset timer for NEXT lap
                         this.lapStartTime = lapEndT;
                         this.completeLap(duration);
+                        
                     }
                 }
             } else {
@@ -656,9 +695,15 @@ class TimeTrialManager {
         }
 
         // Check for Race Finish (Traditional Mode)
-        if (GAME_STATE.mode === 'traditional' && this.lap >= 3) {
+        if (GAME_STATE.mode === 'traditional' && this.lap >= 5) {
             this.endGame();
             return;
+        }
+
+        if (GAME_STATE.mode === 'traditional' && this.lap === 4) {
+            console.log("🎵 FINAL LAP! SPEEED UP!");
+            if (bgmNormal.isPlaying) bgmNormal.stop();
+            if (bgmFast.buffer) bgmFast.play();
         }
 
         this.lap++;
@@ -672,28 +717,70 @@ class TimeTrialManager {
         if (carController) carController.canDrive = false;
         this.isRunning = false;
 
+        // 1. STOP ALL MUSIC
+        if (bgmNormal.isPlaying) bgmNormal.stop();
+        if (bgmFast.isPlaying) bgmFast.stop();
+        if (sfxFanfare.buffer) sfxFanfare.play();
+
+        // 2. GET LAPS (Updated for 5 Laps)
         let lapsToCount = this.lapTimes;
         if (GAME_STATE.mode === 'traditional') {
-             // Ensure we only show the last 3 valid laps
-             lapsToCount = this.lapTimes.slice(-3);
+             lapsToCount = this.lapTimes.slice(-5);
         }
 
         const totalTime = lapsToCount.reduce((a, b) => a + b, 0);
 
+        // 3. UPDATE UI
         const uiContainer = document.getElementById('ui-container');
         const resultsScreen = document.getElementById('results-screen');
         
         if (uiContainer) uiContainer.classList.add('hidden');
         if (resultsScreen) resultsScreen.classList.remove('hidden');
         
-        const l1 = document.getElementById('res-lap1');
-        const l2 = document.getElementById('res-lap2');
-        const l3 = document.getElementById('res-lap3');
+        // Connect to HTML elements
+        // We put them in an array to make the "Golden Logic" easier
+        const lapElements = [
+            document.getElementById('res-lap1'),
+            document.getElementById('res-lap2'),
+            document.getElementById('res-lap3'),
+            document.getElementById('res-lap4'),
+            document.getElementById('res-lap5')
+        ];
         const lTotal = document.getElementById('res-total');
 
-        if (l1) l1.innerText = formatTime(lapsToCount[0] || 0);
-        if (l2) l2.innerText = formatTime(lapsToCount[1] || 0);
-        if (l3) l3.innerText = formatTime(lapsToCount[2] || 0);
+        // ---  GOLDEN LAP LOGIC (NEW)  ---
+        // 1. Find the fastest time (smallest number)
+        // We use Math.min(...array) to find the lowest value
+        let bestTime = Infinity;
+        let bestIndex = -1;
+
+        lapsToCount.forEach((time, index) => {
+            // Fill the text first
+            if (lapElements[index]) {
+                lapElements[index].innerText = formatTime(time);
+                
+                // Reset color (in case they restart and play again)
+                lapElements[index].style.color = "white"; 
+                lapElements[index].style.textShadow = "none";
+                lapElements[index].style.fontWeight = "normal";
+            }
+            
+            // Check if this is the new best
+            if (time < bestTime) {
+                bestTime = time;
+                bestIndex = index;
+            }
+        });
+
+        // 2. Apply Gold Style to the Winner
+        if (bestIndex !== -1 && lapElements[bestIndex]) {
+            const winner = lapElements[bestIndex];
+            winner.style.color = "#FFD700"; // GOLD Color
+            winner.style.textShadow = "0 0 10px #FFD700, 0 0 20px #FFAA00"; // Glowing effect
+            winner.style.fontWeight = "bold";
+        }
+        // -------------------------------------
+        
         if (lTotal) lTotal.innerText = formatTime(totalTime);
     }
 }
