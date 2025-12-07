@@ -22,7 +22,12 @@ const CAR_MODELS = {
         zOffset: 0,
         yOffset: -1,       // FIX 2: Slight Y Offset to prevent sinking into ground
         wheelNames: ["Object_99", "Object_93"],
-        fixPivot: true
+        fixPivot: true,
+        hasCockpit: false,
+        steeringWheelName: null,
+        steeringAxis: null,
+        fixSteeringPivot: false,
+        invertSteering: false,
     },
     'bmw': { 
         name: 'BMW M4 GTS', 
@@ -31,8 +36,15 @@ const CAR_MODELS = {
         rotation: Math.PI,   // FIX 1: Rotate 180 degrees (3.14 radians)
         zOffset: 0,
         yOffset: -0.5,       // FIX 2: Slight Y Offset to prevent sinking into ground
-        wheelNames: [ 'tire', 'carwheel' ],
-        fixPivot: true
+        wheelNames: [ 'tire', 'carwheel'],
+        fixPivot: true,
+        hasCockpit: true,
+        steeringWheelName: ["steering_wheel"],
+        steeringAxis: 'y',
+        fixSteeringPivot: true,
+        invertSteering: false
+
+
                                   
         
     },
@@ -44,7 +56,12 @@ const CAR_MODELS = {
         zOffset: 0,
         yOffset: -0.5,    // FIX 2: Slight Y Offset to prevent sinking into ground
         wheelNames: ["308", "314", "361", "317", "448", "311", "343", "598", "334", "337", "634", "340", "356", "353", "691", "727", "347", "350", "327", "330", "324", "454", "321"],
-        fixPivot: false
+        fixPivot: false,
+        hasCockpit: true,
+        steeringWheelName: ["87" , "90"],
+        steeringAxis: 'z',
+        fixSteeringPivot: true,
+        invertSteering: false
     
     },
     'supra': { 
@@ -55,7 +72,12 @@ const CAR_MODELS = {
         zOffset: 0,
         yOffset: -.5,    // FIX 2: Slight Y Offset to prevent sinking into ground
         wheelNames: ["120", "149"],
-        fixPivot: true
+        fixPivot: true,
+        hasCockpit: true,
+        steeringWheelName: ["204", "205"],
+        steeringAxis: 'y',
+        fixSteeringPivot: true,
+        invertSteering: true
     }
 };
 
@@ -73,9 +95,7 @@ const clock = new THREE.Clock();
 
 // --- UI Elements ---
 const uiSpeed = document.getElementById('speed-display');
-const uiPosX = document.getElementById('pos-x');
-const uiPosY = document.getElementById('pos-y');
-const uiPosZ = document.getElementById('pos-z');
+
 const btnReset = document.getElementById('reset-btn');
 
 // --- Time Trial UI ---
@@ -92,6 +112,15 @@ function formatTime(seconds) {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
 }
 
+// --- CAMERA STATE ---
+let cameraMode = 0; // 0 = Chase, 1 = Hood/Cockpit
+const cameraOffsets = [
+    // Mode 0: Chase (Calculated dynamically via spherical, so we leave this blank/unused)
+    null, 
+    // Mode 1: Hood Cam (Up 2.5, Forward 1.0)c
+    new THREE.Vector3(0, 2.5, -1.0),
+    new THREE.Vector3(0, 1.7, 0.8)   // Mode 2: Cockpit (Lower & Inside)
+];
 
 
 // --- Basic Scene Setup ---
@@ -105,53 +134,56 @@ const defaultCameraTarget = new THREE.Vector3(0, 0, 0);
 camera.position.copy(defaultCameraPosition);
 camera.lookAt(defaultCameraTarget);
 
-// --- AUDIO SETUP (With Ghost Killer) ---
-// 1. Kill old audio engine if it exists from previous reload
-if (window.globalAudioContext) {
-    window.globalAudioContext.close();
-}
-// --- AUDIO SETUP ---
+// --- AUDIO SETUP (SPATIAL UPGRADE) ---
 const listener = new THREE.AudioListener();
-camera.add(listener);
+camera.add(listener); // Listener stays on camera (Ears)
 
 let carController = null;
 const audioLoader = new THREE.AudioLoader();
 
-const idleSound = new THREE.Audio(listener);
-const accelerationSound = new THREE.Audio(listener);
-const driftSound = new THREE.Audio(listener); 
+// CHANGE 1: Use PositionalAudio instead of Audio
+const idleSound = new THREE.PositionalAudio(listener);
+const accelerationSound = new THREE.PositionalAudio(listener);
+const driftSound = new THREE.PositionalAudio(listener); 
+
+// CHANGE 2: Configure 3D Sound Settings
+// RefDistance: Sound is full volume within this distance (e.g., 10 units)
+// RolloffFactor: How fast it gets quiet as you move away
+function configureSound(sound) {
+    sound.setRefDistance(10); 
+    sound.setRolloffFactor(0.5); // 1.0 is real world, 0.5 is more "Arcade" (easier to hear)
+    sound.setDistanceModel('linear'); // Smooth fading
+}
+
+configureSound(idleSound);
+configureSound(accelerationSound);
+configureSound(driftSound);
 
 const tryAttachAudio = () => {
-    // Wait for ALL 3 sounds to load
     if (carController && idleSound.buffer && accelerationSound.buffer && driftSound.buffer) {
         carController.setEngineAudio(idleSound, accelerationSound, driftSound);
     }
 };
 
+// (Keep your existing loader.load calls below - they don't need changing)
 audioLoader.load('idle.mp3', (buffer) => {
     idleSound.setBuffer(buffer);
     idleSound.setLoop(true);
     idleSound.setVolume(0);
     tryAttachAudio();
 });
-
 audioLoader.load('acceleration.mp3', (buffer) => {
     accelerationSound.setBuffer(buffer);
     accelerationSound.setLoop(true);
-    // Start Silent (We fade it in when driving)
     accelerationSound.setVolume(0); 
     tryAttachAudio();
 });
-
 audioLoader.load('drift.mp3', (buffer) => {
-    
     driftSound.setBuffer(buffer);
     driftSound.setLoop(true);
-    // Start Silent (We fade it in when drifting)
     driftSound.setVolume(0);  
     tryAttachAudio();
 });
-
 // Camera follow helpers
 const chaseLerpFactor = 1.12;
 const carWorldPosition = new THREE.Vector3();
@@ -687,66 +719,120 @@ class TimeTrialManager {
 }
 
 class CarControls {
-    // UPDATED: Added 'physicsStats' to the arguments
-    constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef, physicsStats, wheelKeywords=[], shouldFixPivot = false) {
+    constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef, physicsStats, wheelKeywords=[], shouldFixPivot = false, spinAxis = 'x', steeringWheelNames = [], steeringAxis = 'z', fixSteeringPivot = false, invertSteering) {
+    
+        
+        // 🔴 DEBUG PIPELINE 🔴
+        console.log("--- CAR CONTROLS DEBUG ---");
+        console.log("1. Wheel Keywords:", wheelKeywords);
+        console.log("2. Fix Pivot:", shouldFixPivot);
+        console.log("3. Spin Axis:", spinAxis);
+        console.log("4. Steering Names:", steeringWheelNames); // <--- IS THIS EMPTY?
+        console.log("5. Steering Axis:", steeringAxis);
+        console.log("6. Fix Steering Pivot:", fixSteeringPivot);
+        console.log("--------------------------");
+
+
+        // ... rest of code
         this.model = model;
-     
+        this.invertSteering = invertSteering;
+        
+        
+        // --- 1. WHEEL SETUP (Standard) ---
         this.wheels = [];
         const foundWheelMeshes = [];
-
+        // ... (Wheel Finding Logic) ...
         if (wheelKeywords.length > 0) {
             this.model.traverse((child) => {
                 if (child.isMesh) {
                     const isWheel = wheelKeywords.some(keyword => {
-                        // 1. STRICT MATCH: If keyword starts with '=', check EXACT name
-                        if (keyword.startsWith('=')) {
-                            const exactName = keyword.substring(1); // Remove the '='
-                            return child.name === exactName;
-                        }
-                        
-                        // 2. STANDARD MATCH: Check if name *contains* keyword
+                        if (keyword.startsWith('=')) return child.name === keyword.substring(1);
                         return child.name.toLowerCase().includes(keyword.toLowerCase());
                     });
-
                     if (isWheel) foundWheelMeshes.push(child);
                 }
             });
         }
-
+        // Wheel Pivot Logic
         foundWheelMeshes.forEach(mesh => {
             if (shouldFixPivot) {
-                // --- A. THE FIX (For Civic) ---
-                // Create a new group at the wheel's center to act as a hinge
                 const box = new THREE.Box3().setFromObject(mesh);
                 const center = new THREE.Vector3();
                 box.getCenter(center);
-
                 const pivot = new THREE.Group();
                 mesh.parent.add(pivot);
                 pivot.position.copy(mesh.parent.worldToLocal(center.clone()));
-                
                 pivot.attach(mesh);
                 this.wheels.push(pivot);
             } else {
-                // --- B. STANDARD (For BMW) ---
-                // Just grab the mesh directly. It works fine.
                 this.wheels.push(mesh);
             }
         });
-        
-        console.log(`Found and fixed pivots for ${this.wheels.length} wheel parts.`);
+        console.log(`Setup ${this.wheels.length} wheels.`);
+
+
+        // --- 2. STEERING WHEEL SETUP (Copying Wheel Logic) ---
+        this.steeringParts = [];
+        this.steeringAxis = steeringAxis; // Save the axis config
+        if (!Array.isArray(steeringWheelNames)) {
+            if (typeof steeringWheelNames === 'string') {
+                steeringWheelNames = [steeringWheelNames]; // Fix single string
+            } else {
+                steeringWheelNames = []; // Fix null/undefined
+            }
+        }
+
+        if (steeringWheelNames && steeringWheelNames.length > 0) {
+            const rawSteeringParts = [];
+            this.model.traverse((child) => {
+                if (child.isMesh || child.type === 'Group') {
+                    const isMatch = steeringWheelNames.some(keyword => {
+                        if (keyword.startsWith('=')) return child.name === keyword.substring(1);
+                        return child.name.toLowerCase().includes(keyword.toLowerCase());
+                    });
+                    if (isMatch) rawSteeringParts.push(child);
+                }
+            });
+
+            rawSteeringParts.forEach(part => {
+                // FORCE FIX: If config says fix it, we use the EXACT tire logic that worked for you
+                if (fixSteeringPivot) { 
+                    
+                    // A. Calculate Center
+                    const box = new THREE.Box3().setFromObject(part);
+                    const center = new THREE.Vector3();
+                    box.getCenter(center);
+
+                    // B. Create Hinge Group
+                    const pivot = new THREE.Group();
+                    part.parent.add(pivot);
+
+                    // C. Move Hinge to Center
+                    pivot.position.copy(part.parent.worldToLocal(center.clone()));
+
+                    // D. Attach Mesh to Hinge
+                    pivot.attach(part);
+
+                    // E. Save Hinge
+                    this.steeringParts.push(pivot);
+                    console.log("Fixed Steering Pivot (Wheel Method) for:", part.name);
+                } else {
+                    this.steeringParts.push(part);
+                }
+            });
+        }
+
+        // ... (Rest of constructor: Stats, Physics, Audio - Paste your existing code here) ...
+        // [KEEP YOUR EXISTING PHYSICS/AUDIO CODE BELOW]
+        // If you need the full block again let me know, but the key is the Constructor change above.
         
         // --- 1. DYNAMIC CAR STATS ---
-        // We now use the stats passed from the Menu (physicsStats)
-        // If physicsStats is missing (safety check), we fall back to 150cc values
         const stats = physicsStats || { maxSpeed: 120, accel: 45, brake: 50, steer: 0.005, gravity: 180 };
-
         this.maxSpeed = stats.maxSpeed; 
         this.acceleration = stats.accel;
         this.brakeStrength = stats.brake;
         this.maxSteer = stats.steer; 
         this.gravity = stats.gravity;
-        
         this.drag = 0.5;
 
         // --- 2. PHYSICS CONSTANTS ---
@@ -761,12 +847,10 @@ class CarControls {
         this.moveDirection = new THREE.Vector3(0, 0, -1);
         this.isGrounded = false;
         this.isDriftingState = false;
-        
         this.badObjects = ["Object_63", "Object_78", "SafetyNet", "Object_54"];
         this.lastSafePosition = new THREE.Vector3(0, 30, 90); 
         this.lastSafeQuaternion = new THREE.Quaternion();
         this.safePosTimer = 0;
-        
         this.groundMemory = 0; 
         this.memoryDuration = 0.1; 
         this.lastValidGroundY = -Infinity;
@@ -780,7 +864,6 @@ class CarControls {
         this.idleSound = idleSoundRef || null;
         this.accelerationSound = accelerationSoundRef || null;
         this.driftSound = driftSoundRef || null;
-        
         this.keys = { forward: false, backward: false, left: false, right: false, space: false };
         this.canDrive = true; 
 
@@ -791,10 +874,7 @@ class CarControls {
         this.debugMode = false;
         this.arrowSuspension = new THREE.ArrowHelper(new THREE.Vector3(0,-1,0), new THREE.Vector3(), 15, 0x00ff00);
         this.arrowWall = new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(), 6, 0xff0000);
-        this.mindSphere = new THREE.Mesh(
-            new THREE.SphereGeometry(2, 8, 8), 
-            new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, transparent: true, opacity: 0.5 })
-        );
+        this.mindSphere = new THREE.Mesh(new THREE.SphereGeometry(2, 8, 8), new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, transparent: true, opacity: 0.5 }));
         scene.add(this.arrowSuspension);
         scene.add(this.arrowWall);
         scene.add(this.mindSphere); 
@@ -814,14 +894,7 @@ class CarControls {
         // --- 7. SMOKE PARTICLE SYSTEM ---
         this.smokeParticles = [];
         const smokeTex = createSmokeTexture();
-        const smokeMat = new THREE.SpriteMaterial({ 
-            map: smokeTex, 
-            color: 0xffffff, 
-            transparent: true, 
-            opacity: 0.9,    
-            depthWrite: false 
-        });
-
+        const smokeMat = new THREE.SpriteMaterial({ map: smokeTex, color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false });
         for (let i = 0; i < 40; i++) {
             const p = new THREE.Sprite(smokeMat);
             p.visible = false;
@@ -829,77 +902,48 @@ class CarControls {
             scene.add(p);
             this.smokeParticles.push({ mesh: p, life: 0 });
         }
-        
         this.smokeTimer = 0; 
     }
 
-    // --- AUDIO SYSTEM (THE FIX: Play Everything, Adjust Volume) ---
+    // --- PASTE ALL YOUR OTHER METHODS HERE (setEngineAudio, update, etc) ---
+    // [I will provide the updated UPDATE loop below]
+
     setEngineAudio(idle, accel, drift) {
         this.idleSound = idle;
         this.accelerationSound = accel;
         this.driftSound = drift;
-        
-        // 1. Play ALL sounds immediately (Looping)
         if(this.idleSound && !this.idleSound.isPlaying) this.idleSound.play();
         if(this.accelerationSound && !this.accelerationSound.isPlaying) this.accelerationSound.play();
         if(this.driftSound && !this.driftSound.isPlaying) this.driftSound.play();
-
-        // 2. Set initial volumes
         if(this.idleSound) this.idleSound.setVolume(0);
-        if(this.accelerationSound) this.accelerationSound.setVolume(0); // Start Silent
-        if(this.driftSound) this.driftSound.setVolume(0);             // Start Silent
+        if(this.accelerationSound) this.accelerationSound.setVolume(0); 
+        if(this.driftSound) this.driftSound.setVolume(0);             
     }
 
     updateEngineAudio() {
         if (!this.idleSound || !this.accelerationSound || !this.driftSound) return;
-        
-        // 1. Browser Autoplay Fix: Resume context if locked
         if (this.idleSound.context && this.idleSound.context.state === 'suspended') {
             this.idleSound.context.resume();
         }
-
         const isMoving = Math.abs(this.speed) > 1.0; 
-
         if (isMoving) {
-            // --- DRIVE MODE ---
-            
-            // ACCEL: Ensure playing & Loud
             if (!this.accelerationSound.isPlaying) this.accelerationSound.play();
             this.accelerationSound.setVolume(0.5);
-            
-            // Pitch Shift
             const speedRatio = Math.min(Math.abs(this.speed) / this.maxSpeed, 1.0);
             this.accelerationSound.setPlaybackRate(0.8 + (speedRatio * 0.7));
-
-            // IDLE: Mute (Don't stop, just mute)
             this.idleSound.setVolume(0);
-
         } else {
-            // --- IDLE MODE ---
-            
-            // IDLE: Ensure playing & Loud
             if (!this.idleSound.isPlaying) this.idleSound.play();
             this.idleSound.setVolume(0.5);
-
-            // ACCEL: Mute
             this.accelerationSound.setVolume(0);
         }
-
-        // --- DRIFT AUDIO ---
         if (this.isDriftingState && this.isGrounded && Math.abs(this.speed) > 20) {
-            // Force play if it stopped
             if (!this.driftSound.isPlaying) this.driftSound.play();
-            
-            // Fade In
             const currentVol = this.driftSound.getVolume();
             this.driftSound.setVolume(THREE.MathUtils.lerp(currentVol, 0.6, 0.2));
         } else {
-            // Fade Out
             const currentVol = this.driftSound.getVolume();
             this.driftSound.setVolume(THREE.MathUtils.lerp(currentVol, 0, 0.2));
-            
-            // Optional: Stop if silent to be clean
-            if(currentVol < 0.01 && this.driftSound.isPlaying) this.driftSound.stop();
         }
     }
 
@@ -926,7 +970,6 @@ class CarControls {
         this.groundMemory = 0;
     }
 
-    // --- INPUTS ---
     onKeyDown(event) {
         if (!this.canDrive && ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(event.code)) return;
         switch (event.code) {
@@ -947,7 +990,6 @@ class CarControls {
         }
     }
 
-    // --- PARTICLE LOGIC ---
     spawnSmoke(pos) {
         const p = this.smokeParticles.find(p => p.life <= 0);
         if (p) {
@@ -987,54 +1029,34 @@ class CarControls {
         if (this.mindSphere) {
             this.mindSphere.position.copy(wallOrigin);
         }
-        if (this.boxHelper) {
-            this.boxHelper.update();
-        }
     }
 
-    // --- WALL CHECK ---
     checkWallCollisions() {
         if (Math.abs(this.speed) < 1.0) return; 
-
         const worldPos = new THREE.Vector3();
         const worldQuat = new THREE.Quaternion();
         this.model.getWorldPosition(worldPos);
         this.model.getWorldQuaternion(worldQuat);
-
         const forwardDir = new THREE.Vector3(0, 0, (this.speed > 0 ? -1 : 1));
         forwardDir.applyQuaternion(worldQuat).normalize();
-        
         const rayOrigin = worldPos.clone();
         rayOrigin.y += 2.0; 
-
         this.wallRaycaster.set(rayOrigin, forwardDir);
         this.wallRaycaster.far = this.carLength + 2.0; 
-
         const hits = this.wallRaycaster.intersectObjects(mapColliders);
-
         if (hits.length > 0) {
             const hit = hits[0];
             if (hit.object.name === "SafetyNet") return;
             if (!hit.face || !hit.face.normal) return;
-
             const normal = hit.face.normal.clone();
             normal.transformDirection(hit.object.matrixWorld).normalize();
-
             if (isNaN(normal.x) || isNaN(normal.y)) return;
-
-            const specialTolerances = {
-                "Object_40_1": 0.1, 
-                "Object_22": 1.0,
-                "Object_34_1": 1.0,
-                "Object_35_1": 1.0,
-            };
+            const specialTolerances = { "Object_40_1": 0.1, "Object_22": 1.0, "Object_34_1": 1.0, "Object_35_1": 1.0, };
             let activeTolerance = 0.5; 
             if (specialTolerances[hit.object.name] !== undefined) {
                 activeTolerance = specialTolerances[hit.object.name];
             }
-
             if (Math.abs(normal.y) > activeTolerance) return; 
-
             if (hit.distance < this.carLength) {
                 const impactAngle = forwardDir.dot(normal);
                 if (impactAngle < -0.8) {
@@ -1065,17 +1087,11 @@ class CarControls {
             if (this.keys.forward) this.speed += this.acceleration * deltaTime;
             else if (this.keys.backward) this.speed -= this.brakeStrength * deltaTime;
             else this.speed *= (1 - this.drag * deltaTime);
-            
-            // Drift Logic
             this.isDriftingState = this.keys.space && Math.abs(this.speed) > 10;
-            
             if (this.keys.left) this.steering = this.maxSteer * (this.isDriftingState ? 2.0 : 1.0);
             else if (this.keys.right) this.steering = -this.maxSteer * (this.isDriftingState ? 2.0 : 1.0);
             else this.steering = 0;
-
-            // Smoke
             this.updateSmoke(deltaTime);
-
             if (this.isDriftingState && this.isGrounded) {
                 this.smokeTimer += deltaTime;
                 if (this.smokeTimer > 0.05) { 
@@ -1084,12 +1100,10 @@ class CarControls {
                     this.model.getWorldPosition(worldPos);
                     const worldQuat = new THREE.Quaternion();
                     this.model.getWorldQuaternion(worldQuat);
-
                     const offsetL = new THREE.Vector3(-1.5, 0, 2.5); 
                     offsetL.applyQuaternion(worldQuat);
                     offsetL.add(worldPos);
                     this.spawnSmoke(offsetL);
-
                     const offsetR = new THREE.Vector3(1.5, 0, 2.5); 
                     offsetR.applyQuaternion(worldQuat);
                     offsetR.add(worldPos);
@@ -1102,50 +1116,37 @@ class CarControls {
             this.isDriftingState = false;
             this.updateSmoke(deltaTime);
         }
-
         this.speed = THREE.MathUtils.clamp(this.speed, -this.maxSpeed, this.maxSpeed);
-
         if (Math.abs(this.speed) > 0.1) {
             this.model.rotateY(this.steering * (this.speed > 0 ? 1 : -1));
         }
-        
         this.model.updateMatrixWorld(true);
-
         const worldPos = new THREE.Vector3();
         const worldQuat = new THREE.Quaternion();
         this.model.getWorldPosition(worldPos);
         this.model.getWorldQuaternion(worldQuat);
-
         const forwardDir = new THREE.Vector3(0, 0, (this.speed > 0 ? -1 : 1));
         forwardDir.applyQuaternion(worldQuat).normalize();
-        
         const wallRayOrigin = worldPos.clone(); 
         wallRayOrigin.y += 2.0; 
         const suspRayOrigin = worldPos.clone();
         suspRayOrigin.y += 5.0; 
-
         this.checkWallCollisions();
-
         const finalWorldQuat = new THREE.Quaternion();
         this.model.getWorldQuaternion(finalWorldQuat);
         const carFacingDir = new THREE.Vector3(0, 0, -1).applyQuaternion(finalWorldQuat);
-        
         const grip = (this.keys.space && Math.abs(this.speed) > 10) ? 0.05 : 0.8; 
         this.moveDirection.lerp(carFacingDir, grip).normalize();
         if (Math.abs(this.speed) < 5) this.moveDirection.copy(carFacingDir);
-
         this.velocity.x = this.moveDirection.x * this.speed;
         this.velocity.z = this.moveDirection.z * this.speed;
         
-        // --- GROUND PHYSICS ---
         let rayOrigin = suspRayOrigin.clone();
         this.groundRaycaster.set(rayOrigin, new THREE.Vector3(0, -1, 0));
         this.groundRaycaster.far = 15.0; 
         let hits = this.groundRaycaster.intersectObjects(mapColliders);
-
         let groundHit = null;
         if (hits.length > 0) groundHit = hits[0];
-
         if (!groundHit) {
             this.upRaycaster.set(worldPos, new THREE.Vector3(0, 1, 0));
             this.upRaycaster.far = 5.0; 
@@ -1155,31 +1156,24 @@ class CarControls {
                 if (!this.badObjects.includes(roof.object.name)) groundHit = roof; 
             }
         }
-
         let isRayHittingSomething = false;
         if (groundHit) {
             const name = groundHit.object.name;
             const isBadObject = this.badObjects.includes(name) || name.includes("SafetyNet");
-
             if (!isBadObject) {
                 let groundNormal = groundHit.face.normal.clone().applyQuaternion(groundHit.object.quaternion);
                 const angle = groundNormal.angleTo(new THREE.Vector3(0, 1, 0)); 
-
                 if (angle < 1.0 || groundHit.distance < 0) { 
                     const targetY = groundHit.point.y + this.rideHeight;
                     const distToTarget = Math.abs(targetY - this.model.position.y);
-                    
                     const snapDistance = 2.0; 
-
                     if (distToTarget < snapDistance) {
                         isRayHittingSomething = true;
                         this.isGrounded = true;
                         this.groundMemory = this.memoryDuration;
                         this.lastValidGroundY = groundHit.point.y; 
-                        
                         this.velocity.y = Math.max(0, this.velocity.y);
                         this.model.position.y = THREE.MathUtils.lerp(this.model.position.y, targetY, 0.5);
-
                         if (angle < 1.0) {
                             const currentLook = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat);
                             const project = currentLook.clone().sub(groundNormal.clone().multiplyScalar(currentLook.dot(groundNormal))).normalize();
@@ -1187,7 +1181,6 @@ class CarControls {
                             const targetQuat = new THREE.Quaternion().setFromRotationMatrix(targetRot);
                             this.model.quaternion.slerp(targetQuat, this.tiltSpeed);
                         }
-
                         this.safePosTimer += deltaTime;
                         if (this.safePosTimer > 1.0 && Math.abs(this.speed) > 5) {
                             this.lastSafePosition.copy(this.model.position);
@@ -1199,7 +1192,6 @@ class CarControls {
                 }
             }
         }
-
         if (!isRayHittingSomething) {
             this.groundMemory -= deltaTime;
             if (this.groundMemory > 0) {
@@ -1213,34 +1205,51 @@ class CarControls {
                 this.safePosTimer = 0;
             }
         }
-
         this.model.position.addScaledVector(this.velocity, deltaTime);
-        
-        // KEEPING DEATH PLANE AT -10 AS REQUESTED
         if(this.model.position.y < -10) this.hardRespawn();
-
         if (this.isGrounded) {
              const euler = new THREE.Euler().setFromQuaternion(this.model.quaternion, 'YXZ');
              euler.x *= 0.9; 
              euler.z *= 0.9; 
              this.model.quaternion.setFromEuler(euler);
         }
-
         this.updateEngineAudio();
         this.updateDebugVisuals(suspRayOrigin, wallRayOrigin, forwardDir);
-
         if (typeof uiSpeed !== 'undefined') uiSpeed.innerText = Math.abs(this.speed).toFixed(1);
 
-        // --- NEW: SPIN THE WHEELS ---
-        // Rotate wheels based on speed
+        // --- SPIN THE WHEELS ---
         if (this.wheels.length > 0) {
-            const spinAmount = this.speed * deltaTime * 0.5; // Adjust 0.5 to match wheel size
+            const spinAmount = this.speed * deltaTime * 0.5; 
             this.wheels.forEach(wheel => {
-                // Rotate on X axis (Standard for wheels)
-                wheel.rotateX(spinAmount);
+                if (this.spinAxis === 'z') wheel.rotateZ(spinAmount);
+                else if (this.spinAxis === 'y') wheel.rotateY(spinAmount);
+                else wheel.rotateX(spinAmount); 
             });
         }
-  
+
+       // --- ANIMATE VISUAL STEERING WHEEL(S) ---
+       if (this.steeringParts.length > 0) {
+        this.steeringParts.forEach(part => {
+            
+            // 1. Decide direction based on Axis
+            // Z-Axis usually needs -1 to turn left correctly.
+            // Y-Axis usually needs +1.
+            // We use a "ternary operator" to switch automatically.
+            let directionFlip = (this.steeringAxis === 'y') ? 1.0 : -1.0; 
+
+            if( this.invertSteering ) {
+                directionFlip *= -1.0;
+            }
+
+            // 2. Apply Rotation
+            // 15.0 is the "Gear Ratio" (How much the wheel turns visual vs physics)
+            // this.steering is the physics value (approx 0.02)
+            const rotAmount = this.steering * 10.0 * directionFlip;
+
+            // 3. Set the specific axis dynamically
+            part.rotation[this.steeringAxis] = rotAmount;
+        });
+    }
     }
 }
 // --- Loaders ---
@@ -1387,6 +1396,7 @@ if (btnRestartRace) {
 function initGameSession() {
     const selectedCarConfig = CAR_MODELS[GAME_STATE.car];
     const selectedEngineStats = ENGINE_CLASSES[GAME_STATE.engine];
+    cameraMode = 0;
 
     console.log(`STARTING RACE: ${GAME_STATE.mode} | ${GAME_STATE.engine} | ${selectedCarConfig.name}`);
 
@@ -1460,6 +1470,11 @@ function initGameSession() {
         physicsGroup.add(visualModel);
         carModel = physicsGroup; // The game controls the GROUP, not the model
         scene.add(carModel);
+
+        carModel.add(idleSound);
+        carModel.add(accelerationSound);
+        carModel.add(driftSound);
+
         
        // 4. ADD LIGHTING (Headlights + Taillights)
        setupCarLighting(carModel);
@@ -1474,7 +1489,13 @@ function initGameSession() {
             driftSound, 
             selectedEngineStats,
             selectedCarConfig.wheelNames,
-            selectedCarConfig.fixPivot
+            selectedCarConfig.fixPivot,
+            selectedCarConfig.spinAxis,
+            selectedCarConfig.steeringWheelName,
+            selectedCarConfig.steeringAxis,
+            selectedCarConfig.fixSteeringPivot,
+            selectedCarConfig.invertSteering
+
         );
         
         tryAttachAudio();
@@ -1568,20 +1589,48 @@ function animate() {
         if (typeof timeTrial !== 'undefined') timeTrial.update(carModel.position);
     }
 
-    // Camera Logic
+    // --- UPDATED CAMERA LOGIC ---
     if (carModel) {
+        // 1. Get Car Info
         carModel.getWorldPosition(carWorldPosition);
         carModel.getWorldQuaternion(carWorldQuaternion);
+        
+        // 2. Handle Sector Culling (Keep this!)
         if (typeof updateSectorVisibility === 'function') updateSectorVisibility(carWorldPosition);
 
-        followSpherical.radius = THREE.MathUtils.clamp(followSpherical.radius, minCameraDistance, maxCameraDistance);
-        relativeCameraOffset.setFromSpherical(followSpherical);
-        relativeCameraOffset.applyQuaternion(carWorldQuaternion); 
-        desiredCameraPosition.copy(carWorldPosition).add(relativeCameraOffset);
-        
-        camera.position.lerp(desiredCameraPosition, chaseLerpFactor);
-        lookAtTarget.copy(carWorldPosition).add(lookAtOffset);
-        camera.lookAt(lookAtTarget);
+        if (cameraMode === 0) {
+            // --- MODE 0: CHASE CAM (Smooth Elastic Follow) ---
+            followSpherical.radius = THREE.MathUtils.clamp(followSpherical.radius, minCameraDistance, maxCameraDistance);
+            
+            relativeCameraOffset.setFromSpherical(followSpherical);
+            relativeCameraOffset.applyQuaternion(carWorldQuaternion);
+            desiredCameraPosition.copy(carWorldPosition).add(relativeCameraOffset);
+            
+            camera.position.lerp(desiredCameraPosition, chaseLerpFactor);
+            lookAtTarget.copy(carWorldPosition).add(lookAtOffset);
+            camera.lookAt(lookAtTarget);
+
+        } else {
+            // --- MODE 1 & 2: ATTACHED CAMS (Hard Snap) ---
+            // 1. Grab the correct offset for the current mode (Hood or Cockpit)
+            const offset = cameraOffsets[cameraMode].clone();
+            
+            // 2. Rotate it to match the car
+            offset.applyQuaternion(carWorldQuaternion);
+            
+            // 3. Add to car position
+            const camPos = carWorldPosition.clone().add(offset);
+            
+            // 4. SNAP camera there
+            camera.position.copy(camPos);
+            
+            // 5. Look ahead
+            const forward = new THREE.Vector3(0, 0, -20); // Look 20 units ahead
+            forward.applyQuaternion(carWorldQuaternion);
+            const target = carWorldPosition.clone().add(forward);
+            
+            camera.lookAt(target);
+        }
     }
     
    
@@ -1619,7 +1668,7 @@ const debugGhostMaterial = new THREE.MeshBasicMaterial({
 });
 
 function toggleCollisionDebug() {
-    console.log("👉 Toggling Debug..."); 
+    console.log("Toggling Debug..."); 
 
     // 1. Turn OFF
     if (debugGroup) {
@@ -1632,7 +1681,7 @@ function toggleCollisionDebug() {
         const net = mapColliders.find(obj => obj.name === 'SafetyNet');
         if (net) { net.visible = false; net.material.wireframe = false; }
         
-        console.log("❌ Debug: OFF");
+        console.log("Debug: OFF");
         return;
     }
 
@@ -1642,7 +1691,7 @@ function toggleCollisionDebug() {
         return;
     }
 
-    console.log(`✅ Debug: ON (Walls: ${mapColliders.length}, Ghosts: ${ghostColliders.length})`);
+    console.log(`Debug: ON (Walls: ${mapColliders.length}, Ghosts: ${ghostColliders.length})`);
     debugGroup = new THREE.Group();
     scene.add(debugGroup);
 
@@ -1673,7 +1722,27 @@ function toggleCollisionDebug() {
 // Bind Key
 window.addEventListener('keydown', (event) => {
     if (event.repeat) return;
-    if (event.code === 'KeyC') toggleCollisionDebug();
+    if (event.code === 'KeyZ') toggleCollisionDebug();
+});
+
+// Toggle Camera Mode (Press C)
+window.addEventListener('keydown', (event) => {
+    if (event.code === 'KeyC') {
+        // 1. Check the config of the CURRENT car
+        const currentCarConfig = CAR_MODELS[GAME_STATE.car];
+        
+        // 2. Decide how many modes are allowed
+        // If hasCockpit is explicitly false, we only have 2 modes (0 & 1).
+        // Otherwise, we have 3 modes (0, 1, & 2).
+        const maxModes = (currentCarConfig.hasCockpit === false) ? 2 : 3;
+
+        // 3. Cycle through allowed modes
+        cameraMode = (cameraMode + 1) % maxModes; 
+        
+        // Optional Log
+        const modes = ["Chase", "Hood", "Cockpit"];
+        console.log(`CAMERA: ${modes[cameraMode]} (Max: ${maxModes})`);
+    }
 });
 
 levelOneBackground();
