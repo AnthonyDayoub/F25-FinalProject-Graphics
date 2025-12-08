@@ -236,7 +236,8 @@ const mapColliders = [];
 const animatedObjects = [];
 const ghostColliders = [];
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ 
+    antialias: true});
 renderer.shadowMap.enabled = true; 
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
@@ -288,12 +289,14 @@ const onWheel = (event) => {
     event.preventDefault();
     followSpherical.radius = THREE.MathUtils.clamp(followSpherical.radius + event.deltaY * scrollZoomFactor, minCameraDistance, maxCameraDistance);
 };
+/*
 renderer.domElement.addEventListener('pointerdown', onPointerDown);
 renderer.domElement.addEventListener('pointermove', onPointerMove);
 renderer.domElement.addEventListener('pointerup', stopPointerDrag);
 renderer.domElement.addEventListener('pointerleave', stopPointerDrag);
 renderer.domElement.addEventListener('pointercancel', stopPointerDrag);
 renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
+*/
 
 // --- Lights ---
 function setupNeonLighting() {
@@ -503,7 +506,12 @@ function createSponsorBillboard(position) {
         
         // A. The Physical Box (Backing)
         const boxGeo = new THREE.BoxGeometry(62, 22, 2); // Slightly bigger than image
-        const boxMat = new THREE.MeshStandardMaterial({ color: 0x111111 }); // Dark backing
+       // Example for a Glowing Box Frame
+        const boxMat = new THREE.MeshPhongMaterial({ 
+        color: 0x111111,
+        emissive: 0x00ffcc, // Cyan Glow
+        emissiveIntensity: 0.01
+        });
         const box = new THREE.Mesh(boxGeo, boxMat);
         signGroup.add(box);
 
@@ -859,19 +867,6 @@ class TimeTrialManager {
 class CarControls {
     constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef, physicsStats, wheelKeywords=[], shouldFixPivot = false, spinAxis = 'x', steeringWheelNames = [], steeringAxis = 'z', fixSteeringPivot = false, invertSteering) {
     
-        
-        // 🔴 DEBUG PIPELINE 🔴
-        console.log("--- CAR CONTROLS DEBUG ---");
-        console.log("1. Wheel Keywords:", wheelKeywords);
-        console.log("2. Fix Pivot:", shouldFixPivot);
-        console.log("3. Spin Axis:", spinAxis);
-        console.log("4. Steering Names:", steeringWheelNames); // <--- IS THIS EMPTY?
-        console.log("5. Steering Axis:", steeringAxis);
-        console.log("6. Fix Steering Pivot:", fixSteeringPivot);
-        console.log("--------------------------");
-
-
-        // ... rest of code
         this.model = model;
         this.invertSteering = invertSteering;
         
@@ -1412,11 +1407,8 @@ export function levelOneBackground() {
             "Object_0",
             "Object_23_1",
             "Object_22",
-            //"Object_35_1",
            "Object_57_1",
             "Object_17_1",
-            //"Object_7_1"
-            //"Object_34_1",
             "Object_16_1",
             "Object_41",
            
@@ -1538,8 +1530,6 @@ function initGameSession() {
     // Use "P" key to find a good spot on a wall or turn!
     createSponsorBillboard(new THREE.Vector3(330, 35, -470.8));
 
-    console.log(`STARTING RACE: ${GAME_STATE.mode} | ${GAME_STATE.engine} | ${selectedCarConfig.name}`);
-
     if (carModel) {
         scene.remove(carModel);
         carModel = null;
@@ -1576,8 +1566,6 @@ function initGameSession() {
             }
         });
         // -------------------------------------
-
-        // ... (The rest of your code: scaling, rotation, yOffset, combining, etc.)
         
         // ---  PASTE THIS INSPECTOR CODE HERE ---
         console.group(` INSPECTING: ${selectedCarConfig.name}`);
@@ -1681,17 +1669,6 @@ window.addEventListener('keydown', (event) => {
     }
 });
 
-// ww--- THE UI TRACKER (The "Ghost Hunter") ---
-const trackerGeo = new THREE.SphereGeometry(3, 16, 16);
-const trackerMat = new THREE.MeshBasicMaterial({ 
-    color: 0xFF00FF, // MAGENTA = "Where the UI thinks you are"
-    wireframe: false,
-    transparent: true,
-    opacity: 0.8
-});
-
-
-
 // Add a label to it so we don't get confused
 const trackerLabelDiv = document.createElement('div');
 trackerLabelDiv.className = 'label';
@@ -1792,86 +1769,6 @@ window.addEventListener('resize', () => {
     composer.setSize(window.innerWidth, window.innerHeight);
 }, false);
 
-
-
-// --- DEBUG TOOL: Collision Vision ---
-let debugGroup = null;
-
-// Material 1: HARD WALLS (Magenta)
-const debugMaterial = new THREE.MeshBasicMaterial({
-    color: 0xff00ff, 
-    wireframe: true,
-    depthTest: false,
-    transparent: true,
-    opacity: 0.5
-});
-
-// Material 2: GHOST OBJECTS (Electric Blue)
-const debugGhostMaterial = new THREE.MeshBasicMaterial({
-    color: 0x00aaff, 
-    wireframe: true,
-    depthTest: false,
-    transparent: true,
-    opacity: 0.3 // Slightly more transparent than walls
-});
-
-function toggleCollisionDebug() {
-    console.log("Toggling Debug..."); 
-
-    // 1. Turn OFF
-    if (debugGroup) {
-        scene.remove(debugGroup);
-        // Dispose geometries to free memory
-        debugGroup.traverse(child => { if(child.isMesh) child.geometry.dispose(); });
-        debugGroup = null;
-        
-        // Hide Safety Net
-        const net = mapColliders.find(obj => obj.name === 'SafetyNet');
-        if (net) { net.visible = false; net.material.wireframe = false; }
-        
-        console.log("Debug: OFF");
-        return;
-    }
-
-    // 2. Turn ON
-    if (mapColliders.length === 0) {
-        console.warn("⚠️ Map not loaded yet.");
-        return;
-    }
-
-    console.log(`Debug: ON (Walls: ${mapColliders.length}, Ghosts: ${ghostColliders.length})`);
-    debugGroup = new THREE.Group();
-    scene.add(debugGroup);
-
-    // Helper Function to draw a list
-    const addDebugMeshes = (list, material) => {
-        list.forEach(obj => {
-            if (obj.name === 'SafetyNet') {
-                obj.visible = true;
-                obj.material.color.setHex(0xff0000); 
-                obj.material.wireframe = true;
-                return; 
-            }
-
-            if (obj.geometry) {
-                const clone = new THREE.Mesh(obj.geometry, material);
-                obj.updateWorldMatrix(true, false);
-                clone.applyMatrix4(obj.matrixWorld);
-                debugGroup.add(clone);
-            }
-        });
-    };
-
-    // Draw Both Lists
-    addDebugMeshes(mapColliders, debugMaterial);      // Magenta
-    addDebugMeshes(ghostColliders, debugGhostMaterial); // Blue
-}
-
-// Bind Key
-window.addEventListener('keydown', (event) => {
-    if (event.repeat) return;
-    if (event.code === 'KeyZ') toggleCollisionDebug();
-});
 
 // Toggle Camera Mode (Press C)
 window.addEventListener('keydown', (event) => {
