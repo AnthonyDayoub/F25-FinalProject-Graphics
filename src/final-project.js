@@ -48,6 +48,29 @@ const CAR_MODELS = {
                                   
         
     },
+    'x5': {
+        name: 'BMW X5 (2019)',
+        path: '2019_bmw_x5_xdrive30d.glb',
+        scale: 200,
+        rotation: Math.PI,
+        zOffset: 0,
+        yOffset: -0.5,
+        wheelNames: [
+            'tire_0',
+            'rim_black_0',
+            'rim_chrome_0',
+            'disk_1',
+            'disk_2'
+        ],
+        fixPivot: true,
+        spinAxis: 'x',
+        disableWheelSpin: true,
+        hasCockpit: true,
+        steeringWheelName: [],
+        steeringAxis: 'y',
+        fixSteeringPivot: false,
+        invertSteering: false
+    },
     'civic': { 
         name: 'Honda Civic Type R', 
         path: 'honda_civic.glb',
@@ -380,6 +403,22 @@ function styleMeshForNeon(child) {
         return clone;
     });
     child.material = Array.isArray(child.material) ? styled : styled[0];
+}
+
+// Force a dark paint job on opaque body parts while leaving glass/lights intact
+function applyBlackPaint(model) {
+    model.traverse((child) => {
+        if (!child.isMesh || !child.material) return;
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach((mat) => {
+            const name = (mat.name || '').toLowerCase();
+            // Leave windows, lights, and emissive bits unchanged
+            if (name.includes('glass') || name.includes('light') || name.includes('emiss')) return;
+            if (mat.color) mat.color.set('#111111');
+            if ('metalness' in mat) mat.metalness = Math.max(mat.metalness ?? 0.6, 0.85);
+            if ('roughness' in mat) mat.roughness = 0.28;
+        });
+    });
 }
 
 // UPDATED: Now adds White Headlights AND Red Taillights
@@ -865,10 +904,12 @@ class TimeTrialManager {
 }
 
 class CarControls {
-    constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef, physicsStats, wheelKeywords=[], shouldFixPivot = false, spinAxis = 'x', steeringWheelNames = [], steeringAxis = 'z', fixSteeringPivot = false, invertSteering) {
+    constructor(model, idleSoundRef, accelerationSoundRef, driftSoundRef, physicsStats, wheelKeywords=[], shouldFixPivot = false, spinAxis = 'x', steeringWheelNames = [], steeringAxis = 'z', fixSteeringPivot = false, invertSteering, disableWheelSpin = false) {
     
         this.model = model;
         this.invertSteering = invertSteering;
+        this.spinAxis = spinAxis || 'x';
+        this.disableWheelSpin = disableWheelSpin;
         
         
         // --- 1. WHEEL SETUP (Standard) ---
@@ -1351,7 +1392,7 @@ class CarControls {
         if (typeof uiSpeed !== 'undefined') uiSpeed.innerText = Math.abs(this.speed).toFixed(1);
 
         // --- SPIN THE WHEELS ---
-        if (this.wheels.length > 0) {
+        if (this.wheels.length > 0 && !this.disableWheelSpin) {
             const spinAmount = this.speed * deltaTime * 0.5; 
             this.wheels.forEach(wheel => {
                 if (this.spinAxis === 'z') wheel.rotateZ(spinAmount);
@@ -1566,6 +1607,7 @@ function initGameSession() {
             }
         });
         // -------------------------------------
+        applyBlackPaint(visualModel);
         
         // ---  PASTE THIS INSPECTOR CODE HERE ---
         console.group(` INSPECTING: ${selectedCarConfig.name}`);
@@ -1618,11 +1660,12 @@ function initGameSession() {
             selectedEngineStats,
             selectedCarConfig.wheelNames,
             selectedCarConfig.fixPivot,
-            selectedCarConfig.spinAxis,
+            selectedCarConfig.spinAxis || 'x',
             selectedCarConfig.steeringWheelName,
             selectedCarConfig.steeringAxis,
             selectedCarConfig.fixSteeringPivot,
-            selectedCarConfig.invertSteering
+            selectedCarConfig.invertSteering,
+            selectedCarConfig.disableWheelSpin
 
         );
         
