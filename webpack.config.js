@@ -50,6 +50,7 @@ module.exports = {
                 {from : path.resolve(__dirname, 'src/cyberpunk_car.glb'), to: 'cyberpunk_car.glb' },
                 {from : path.resolve(__dirname, 'src/honda_civic.glb'), to: 'honda_civic.glb' },
                 {from : path.resolve(__dirname, 'src/supra.glb'), to: 'supra.glb' },
+                {from : path.resolve(__dirname, 'src/odyssey.glb'), to: 'odyssey.glb' },
             ],
         }),
     ],

@@ -101,6 +101,22 @@ const CAR_MODELS = {
         steeringAxis: 'y',
         fixSteeringPivot: true,
         invertSteering: true
+
+    },
+    'odyssey': { 
+        name: 'Honda Odyssey', 
+        path: 'odyssey.glb',
+        scale: 0.02,          // Your scale
+        rotation: 0,   
+        zOffset: 0,
+        yOffset: -.5,    // FIX 2: Slight Y Offset to prevent sinking into ground
+        wheelNames: ["35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "46", "47", "48"],
+        fixPivot: true,
+        hasCockpit: true,
+        steeringWheelName: ["204", "205"],
+        steeringAxis: 'y',
+        fixSteeringPivot: true,
+        invertSteering: true
     }
 };
 
@@ -140,9 +156,12 @@ let cameraMode = 0; // 0 = Chase, 1 = Hood/Cockpit
 const cameraOffsets = [
     // Mode 0: Chase (Calculated dynamically via spherical, so we leave this blank/unused)
     null, 
-    // Mode 1: Hood Cam (Up 2.5, Forward 1.0)c
+
+    // Mode 1: Hood Cam (Up 2.5, Forward 1.0)
     new THREE.Vector3(0, 2.5, -1.0),
     new THREE.Vector3(0, 1.7, 0.8)   // Mode 2: Cockpit (Lower & Inside)
+
+    
 ];
 
 
@@ -312,14 +331,14 @@ const onWheel = (event) => {
     event.preventDefault();
     followSpherical.radius = THREE.MathUtils.clamp(followSpherical.radius + event.deltaY * scrollZoomFactor, minCameraDistance, maxCameraDistance);
 };
-/*
+
 renderer.domElement.addEventListener('pointerdown', onPointerDown);
 renderer.domElement.addEventListener('pointermove', onPointerMove);
 renderer.domElement.addEventListener('pointerup', stopPointerDrag);
 renderer.domElement.addEventListener('pointerleave', stopPointerDrag);
 renderer.domElement.addEventListener('pointercancel', stopPointerDrag);
 renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
-*/
+
 
 // --- Lights ---
 function setupNeonLighting() {
@@ -407,13 +426,15 @@ function styleMeshForNeon(child) {
 
 // Force a dark paint job on opaque body parts while leaving glass/lights intact
 function applyBlackPaint(model) {
+    if(model )
     model.traverse((child) => {
         if (!child.isMesh || !child.material) return;
         const materials = Array.isArray(child.material) ? child.material : [child.material];
         materials.forEach((mat) => {
             const name = (mat.name || '').toLowerCase();
+         
             // Leave windows, lights, and emissive bits unchanged
-            if (name.includes('glass') || name.includes('light') || name.includes('emiss')) return;
+            if (!name.includes('carpaint')) return;
             if (mat.color) mat.color.set('#111111');
             if ('metalness' in mat) mat.metalness = Math.max(mat.metalness ?? 0.6, 0.85);
             if ('roughness' in mat) mat.roughness = 0.28;
@@ -574,7 +595,7 @@ function createSponsorBillboard(position) {
         // --- ADD TO ROTATION LIST ---
         animatedObjects.push(signGroup);
         
-        console.log("Real Billboard Built at", position);
+  
     });
 }
 
@@ -736,7 +757,7 @@ class TimeTrialManager {
             if (targetCP.isFinish) {
                 if (this.isWarmup) {
                     // --- WARMUP END ---
-                    console.log("WARMUP COMPLETE");
+                  
                     this.isWarmup = false;
                     this.isRunning = true;
 
@@ -781,7 +802,7 @@ class TimeTrialManager {
 
     completeLap(duration) {
         this.lapTimes.push(duration);
-        console.log(`Lap ${this.lap} Finished: ${duration.toFixed(2)}s`);
+       
 
         if (duration < this.bestTime) {
             this.bestTime = duration;
@@ -799,7 +820,7 @@ class TimeTrialManager {
         }
 
         if (GAME_STATE.mode === 'traditional' && this.lap === 4) {
-            console.log("🎵 FINAL LAP! SPEEED UP!");
+       
             if (bgmNormal.isPlaying) bgmNormal.stop();
             if (bgmFast.buffer) bgmFast.play();
         }
@@ -942,7 +963,7 @@ class CarControls {
                 this.wheels.push(mesh);
             }
         });
-        console.log(`Setup ${this.wheels.length} wheels.`);
+    
 
 
         // --- 2. STEERING WHEEL SETUP (Copying Wheel Logic) ---
@@ -989,7 +1010,7 @@ class CarControls {
 
                     // E. Save Hinge
                     this.steeringParts.push(pivot);
-                    console.log("Fixed Steering Pivot (Wheel Method) for:", part.name);
+                  
                 } else {
                     this.steeringParts.push(part);
                 }
@@ -1012,7 +1033,7 @@ class CarControls {
         // --- 2. PHYSICS CONSTANTS ---
         this.rideHeight = 0.5; 
         this.tiltSpeed = 0.08; 
-        this.carLength = 4.0; 
+        this.carLength = 4.0;
         this.wallBounce = 0.2; 
 
         // --- 3. STATE ---
@@ -1021,8 +1042,8 @@ class CarControls {
         this.moveDirection = new THREE.Vector3(0, 0, -1);
         this.isGrounded = false;
         this.isDriftingState = false;
-        this.badObjects = ["Object_63", "Object_78", "SafetyNet", "Object_54"];
-        this.lastSafePosition = new THREE.Vector3(0, 30, 90); 
+        this.badObjects = [];
+        this.lastSafePosition = new THREE.Vector3(0, 30, 180); 
         this.lastSafeQuaternion = new THREE.Quaternion();
         this.safePosTimer = 0;
         this.groundMemory = 0; 
@@ -1124,9 +1145,9 @@ class CarControls {
     manualReset() {
         this.speed = 0;
         this.velocity.set(0, 0, 0);
-        this.model.position.set(0, 30, 90); 
+        this.model.position.set(0, 30, 180); 
         this.model.rotation.set(0, 0, 0);
-        this.lastSafePosition.set(0, 30, 90);
+        this.lastSafePosition.set(0, 30, 180);
         this.moveDirection.set(0, 0, -1);
         this.groundMemory = 0;
     }
@@ -1214,7 +1235,7 @@ class CarControls {
         const forwardDir = new THREE.Vector3(0, 0, (this.speed > 0 ? -1 : 1));
         forwardDir.applyQuaternion(worldQuat).normalize();
         const rayOrigin = worldPos.clone();
-        rayOrigin.y += 2.0; 
+        rayOrigin.y += 2;
         this.wallRaycaster.set(rayOrigin, forwardDir);
         this.wallRaycaster.far = this.carLength + 2.0; 
         const hits = this.wallRaycaster.intersectObjects(mapColliders);
@@ -1225,8 +1246,8 @@ class CarControls {
             const normal = hit.face.normal.clone();
             normal.transformDirection(hit.object.matrixWorld).normalize();
             if (isNaN(normal.x) || isNaN(normal.y)) return;
-            const specialTolerances = { "Object_40_1": 0.1, "Object_22": 1.0, "Object_34_1": 1.0, "Object_35_1": 1.0, };
-            let activeTolerance = 0.5; 
+            const specialTolerances = { "Object_40_1": 0.1, "Object_22": 1.0, "Object_34_1": 1.0, "Object_35_1": 1.0, "Object_50_1": 0.3 };
+            let activeTolerance = .5; 
             if (specialTolerances[hit.object.name] !== undefined) {
                 activeTolerance = specialTolerances[hit.object.name];
             }
@@ -1309,7 +1330,7 @@ class CarControls {
         const finalWorldQuat = new THREE.Quaternion();
         this.model.getWorldQuaternion(finalWorldQuat);
         const carFacingDir = new THREE.Vector3(0, 0, -1).applyQuaternion(finalWorldQuat);
-        const grip = (this.keys.space && Math.abs(this.speed) > 10) ? 0.05 : 0.8; 
+        const grip = (this.keys.space && Math.abs(this.speed) > 10) ? 0.12 : 0.8; 
         this.moveDirection.lerp(carFacingDir, grip).normalize();
         if (Math.abs(this.speed) < 5) this.moveDirection.copy(carFacingDir);
         this.velocity.x = this.moveDirection.x * this.speed;
@@ -1428,12 +1449,12 @@ class CarControls {
 }
 // --- Loaders ---
 export function levelOneBackground() {
-    console.log("LOADING MAP: moonview_highway.glb");
+   
 
     const loader = new GLTFLoader();
     
     loader.load('moonview_highway.glb', (gltf) => {
-        console.log("MAP LOADED!");
+ 
         const model = gltf.scene;
 
         model.scale.set(600.0, 600.0, 600.0); 
@@ -1447,7 +1468,7 @@ export function levelOneBackground() {
             
             "Object_0",
             "Object_23_1",
-            "Object_22",
+            //"Object_22",
            "Object_57_1",
             "Object_17_1",
             "Object_16_1",
@@ -1504,7 +1525,7 @@ function setupMenuSelection(id, configKey) {
             btn.classList.add('selected');
             // Update Config
             GAME_STATE[configKey] = btn.getAttribute('data-value');
-            console.log(`Updated ${configKey}:`, GAME_STATE[configKey]);
+      
         });
     });
 }
@@ -1544,7 +1565,7 @@ if (btnReturn) {
 const btnRestartRace = document.getElementById('reset-btn');
 if (btnRestartRace) {
     btnRestartRace.addEventListener('click', () => {
-        console.log("RESTARTING RACE...");
+    
 
         // 1. Reset Physics & Position
         if (carController) {
@@ -1586,7 +1607,7 @@ function initGameSession() {
     loader.load(selectedCarConfig.path, (gltf) => {
         // 1. CREATE THE WRAPPER
         const physicsGroup = new THREE.Group();
-        physicsGroup.position.set(0, 30, 90); 
+        physicsGroup.position.set(0, 30, 180); 
 
         // 2. SETUP THE VISUALS
         const visualModel = gltf.scene;
@@ -1607,16 +1628,12 @@ function initGameSession() {
             }
         });
         // -------------------------------------
-        applyBlackPaint(visualModel);
+        // only apply paint to the x5 and honda
+        if (selectedCarConfig.name === "BMW X5 (2019)") {
+            applyBlackPaint(visualModel);
+        }
         
-        // ---  PASTE THIS INSPECTOR CODE HERE ---
-        console.group(` INSPECTING: ${selectedCarConfig.name}`);
-        visualModel.traverse((child) => {
-            if (child.isMesh) {
-                console.log(` PART NAME: "${child.name}" | TYPE: ${child.type}`);
-            }
-        });
-
+   
         // Apply Scale to Visuals Only
         visualModel.scale.set(selectedCarConfig.scale, selectedCarConfig.scale, selectedCarConfig.scale);
         
@@ -1703,14 +1720,6 @@ if (btnRestart) {
     });
 }
 
-// Coordinate Logger Tool (Press P to log position)
-window.addEventListener('keydown', (event) => {
-    if (event.key === 'p' || event.key === 'P') {
-        if (!carModel) return;
-        const p = carModel.position;
-        console.log(`{ pos: new THREE.Vector3(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}), radius: 15, passed: false },`);
-    }
-});
 
 // Add a label to it so we don't get confused
 const trackerLabelDiv = document.createElement('div');
@@ -1782,6 +1791,22 @@ function animate() {
             // --- MODE 1 & 2: ATTACHED CAMS (Hard Snap) ---
             // 1. Grab the correct offset for the current mode (Hood or Cockpit)
             const offset = cameraOffsets[cameraMode].clone();
+            if(GAME_STATE.car === "odyssey" && cameraMode === 1) {
+                offset.y += 1; 
+            }
+            if(GAME_STATE.car === "odyssey" && cameraMode === 2) {
+                offset.y += .4; 
+                offset.z += -1.2;
+            }
+            if(GAME_STATE.car === "x5" && cameraMode === 1) {
+                offset.y += 1; 
+            }
+            if(GAME_STATE.car === "x5" && cameraMode === 2) {
+                offset.y += 1; 
+            }
+            
+            
+            
             
             // 2. Rotate it to match the car
             offset.applyQuaternion(carWorldQuaternion);
